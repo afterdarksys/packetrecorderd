@@ -105,3 +105,6 @@ Use the `tracing` crate for structured logging:
 - `info!()` for important events (interface opens, filter application)
 - `warn!()` for recoverable issues
 - `error!()` for serious problems
+
+### This file has been created and provided for automated contextual analysis when using warp.dev
+
