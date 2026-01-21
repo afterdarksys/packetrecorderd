@@ -119,6 +119,7 @@ use protocols::tls::TlsParser;
     
     // Configure capture
     let config = CaptureConfig {
+        driver: capture::CaptureDriver::Pcap,
         interface: args.interface.clone(),
         snaplen: args.snaplen,
         promisc: args.promisc,

@@ -4,6 +4,7 @@ use pcap::{Active, Capture, Device, Packet};
 use tracing::info;
 
 pub mod writer;
+pub mod ebpf;
 
 /// Represents a network interface available for capture
 #[derive(Debug, Clone)]
@@ -37,9 +38,16 @@ pub fn list_interfaces() -> Result<Vec<NetworkInterface>> {
     Ok(interfaces)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureDriver {
+    Pcap,
+    Xdp,
+}
+
 /// Configuration for packet capture
 #[derive(Debug, Clone)]
 pub struct CaptureConfig {
+    pub driver: CaptureDriver,
     pub interface: String,
     pub snaplen: i32,
     pub promisc: bool,
@@ -51,6 +59,7 @@ pub struct CaptureConfig {
 impl Default for CaptureConfig {
     fn default() -> Self {
         Self {
+            driver: CaptureDriver::Pcap,
             interface: String::new(),
             snaplen: 65535,  // Maximum packet size
             promisc: true,    // Promiscuous mode

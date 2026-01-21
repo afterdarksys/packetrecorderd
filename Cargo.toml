@@ -37,3 +37,7 @@ x509-parser = "0.15"
 netflow_parser = "0.2"
 # sflow parsing often requires custom implementation or specific crates
 # using nom for custom parsing if needed, but adding a placeholder for now
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aya = { version = "0.13", features = ["async_tokio"] }
+aya-log = "0.2"
