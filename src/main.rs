@@ -80,7 +80,7 @@ async fn cmd_capture(args: cli::CaptureArgs) -> Result<()> {
     use capture::{CaptureConfig, CaptureSession};
     use config::signatures::Signatures;
     use forensics::{ForensicsEngine, ForensicsAlert};
-use protocols::tls::TlsParser;
+use protocols::{tls::TlsParser, ldap::LdapParser, netbios::NetbiosParser, ProtocolParser};
     
     info!("Starting packet capture on interface: {}", args.interface);
 
@@ -101,6 +101,8 @@ use protocols::tls::TlsParser;
 
     let forensics = ForensicsEngine::new(signatures);
     let tls_parser = TlsParser::new();
+    let ldap_parser = LdapParser::new();
+    let netbios_parser = NetbiosParser::new();
     
     // Open database
     let store = Arc::new(Mutex::new(PacketStore::new(&args.database)
@@ -199,12 +201,33 @@ use protocols::tls::TlsParser;
         }
 
                     if !payload.is_empty() {
-                         // Try TLS parsing
-                         let protocol_info = if let Ok(info) = tls_parser.parse(payload) {
-                             info
-                         } else {
-                             protocols::ProtocolInfo::Unknown
-                         };
+                         // Protocol detection chain
+                         let mut protocol_info = protocols::ProtocolInfo::Unknown;
+                         
+                         // Try TLS
+                         if let Ok(info) = tls_parser.parse(payload) {
+                             if !matches!(info, protocols::ProtocolInfo::Unknown) {
+                                 protocol_info = info;
+                             }
+                         }
+                         
+                         // Try LDAP if unknown
+                         if matches!(protocol_info, protocols::ProtocolInfo::Unknown) {
+                             if let Ok(info) = ldap_parser.parse(payload) {
+                                 if !matches!(info, protocols::ProtocolInfo::Unknown) {
+                                     protocol_info = info;
+                                 }
+                             }
+                         }
+
+                         // Try NetBIOS if unknown
+                         if matches!(protocol_info, protocols::ProtocolInfo::Unknown) {
+                             if let Ok(info) = netbios_parser.parse(payload) {
+                                 if !matches!(info, protocols::ProtocolInfo::Unknown) {
+                                     protocol_info = info;
+                                 }
+                             }
+                         }
 
                          let alerts = forensics.analyze(&src_ip, &dst_ip, src_port, dst_port, &protocol_info, data.len());
                          for alert in alerts {

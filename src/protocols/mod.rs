@@ -4,10 +4,11 @@ pub mod http;
 pub mod dns;
 pub mod netflow;
 pub mod sflow;
+pub mod ldap;
+pub mod netbios;
 
+#[allow(dead_code)]
 use anyhow::Result;
-
-/// Trait for protocol parsers
 pub trait ProtocolParser {
     fn parse(&self, data: &[u8]) -> Result<ProtocolInfo>;
 }
@@ -17,6 +18,8 @@ pub enum ProtocolInfo {
     Tls(TlsInfo),
     Http(HttpInfo),
     Dns(DnsInfo),
+    Ldap(ldap::LdapInfo),
+    Netbios(netbios::NetbiosInfo),
     Netflow(String),
     Sflow(String),
     Unknown,
