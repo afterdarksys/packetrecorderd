@@ -20,7 +20,7 @@ libc = "0.2"
 object_store = { version = "0.9", features = ["aws", "gcp", "azure", "http"] }
 pcap-file = "2.0"
 url = "2.5"
-tch = "0.14"
+tch = "0.15"
 candle-core = "0.3.3"
 candle-nn = "0.3.3"
 curl = "0.4"
@@ -35,6 +35,5 @@ openssl = { version = "0.10", features = ["vendored"] }
 tls-parser = "0.11"
 x509-parser = "0.15"
 netflow_parser = "0.2"
-hex = "0.4.3"
 # sflow parsing often requires custom implementation or specific crates
 # using nom for custom parsing if needed, but adding a placeholder for now

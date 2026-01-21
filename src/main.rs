@@ -14,8 +14,6 @@ use clap::Parser;
 use std::sync::{Arc, Mutex};
 use tokio::signal;
 use tracing::{error, info};
-use tracing_subscriber;
-
 use cli::{Cli, Commands};
 use storage::PacketStore;
 
@@ -82,7 +80,7 @@ async fn cmd_capture(args: cli::CaptureArgs) -> Result<()> {
     use capture::{CaptureConfig, CaptureSession};
     use config::signatures::Signatures;
     use forensics::{ForensicsEngine, ForensicsAlert};
-    use protocols::{tls::TlsParser, ProtocolParser};
+use protocols::tls::TlsParser;
     
     info!("Starting packet capture on interface: {}", args.interface);
 
@@ -159,43 +157,45 @@ async fn cmd_capture(args: cli::CaptureArgs) -> Result<()> {
                 if let Err(e) = writer.write_packet(timestamp, data.clone()).await {
                     error!("Failed to write packet: {:?}", e);
                 }
+
+                packet_count += 1;
                 
                 // Analysis
-                if let Ok(sliced) = etherparse::SlicedPacket::from_ethernet(&data) {
-                    let mut src_ip = "0.0.0.0".to_string();
-                    let mut dst_ip = "0.0.0.0".to_string();
-                    let mut src_port = 0;
-                    let mut dst_port = 0;
-                    let mut payload = &[];
+    if let Ok(sliced) = etherparse::SlicedPacket::from_ethernet(&data) {
+        let mut src_ip = "0.0.0.0".to_string();
+        let mut dst_ip = "0.0.0.0".to_string();
+        let mut src_port = 0;
+        let mut dst_port = 0;
+        let mut payload: &[u8] = &[];
 
-                    if let Some(ip) = sliced.ip {
-                        match ip {
-                            etherparse::InternetSlice::Ipv4(ipv4, _) => {
-                                src_ip = ipv4.source_addr().to_string();
-                                dst_ip = ipv4.destination_addr().to_string();
-                            },
-                            etherparse::InternetSlice::Ipv6(ipv6, _) => {
-                                src_ip = ipv6.source_addr().to_string();
-                                dst_ip = ipv6.destination_addr().to_string();
-                            }
-                        }
-                    }
+        if let Some(net) = sliced.net {
+            match net {
+                etherparse::NetSlice::Ipv4(ipv4) => {
+                    src_ip = std::net::Ipv4Addr::from(ipv4.header().source()).to_string();
+                    dst_ip = std::net::Ipv4Addr::from(ipv4.header().destination()).to_string();
+                },
+                etherparse::NetSlice::Ipv6(ipv6) => {
+                    src_ip = std::net::Ipv6Addr::from(ipv6.header().source()).to_string();
+                    dst_ip = std::net::Ipv6Addr::from(ipv6.header().destination()).to_string();
+                }
+            }
+        }
 
-                    if let Some(transport) = sliced.transport {
-                         match transport {
-                             etherparse::TransportSlice::Tcp(tcp) => {
-                                 src_port = tcp.source_port();
-                                 dst_port = tcp.destination_port();
-                                 payload = sliced.payload;
-                             },
-                             etherparse::TransportSlice::Udp(udp) => {
-                                 src_port = udp.source_port();
-                                 dst_port = udp.destination_port();
-                                 payload = sliced.payload;
-                             },
-                             _ => {}
-                         }
-                    }
+        if let Some(transport) = sliced.transport {
+                match transport {
+                    etherparse::TransportSlice::Tcp(tcp) => {
+                        src_port = tcp.source_port();
+                        dst_port = tcp.destination_port();
+                        payload = tcp.payload();
+                    },
+                    etherparse::TransportSlice::Udp(udp) => {
+                        src_port = udp.source_port();
+                        dst_port = udp.destination_port();
+                        payload = udp.payload();
+                    },
+                    _ => {}
+                }
+        }
 
                     if !payload.is_empty() {
                          // Try TLS parsing
@@ -225,7 +225,7 @@ async fn cmd_capture(args: cli::CaptureArgs) -> Result<()> {
                     }
                 }
                 
-                if packet_count % 1000 == 0 {
+                if packet_count.is_multiple_of(1000) {
                     info!("Captured {} packets", packet_count);
                 }
                 

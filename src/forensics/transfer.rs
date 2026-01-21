@@ -1,6 +1,6 @@
 use crate::config::signatures::Signatures;
 use std::collections::HashMap;
-use std::time::{SystemTime, Duration};
+use std::time::SystemTime;
 use std::sync::Arc;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]

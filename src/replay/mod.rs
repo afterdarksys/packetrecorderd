@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use std::sync::{Arc, Mutex};
@@ -135,7 +136,7 @@ impl ReplaySession {
         self.stats.packets_replayed += 1;
         self.stats.bytes_replayed += packet.data.len() as u64;
         
-        if self.stats.packets_replayed % 100 == 0 {
+        if self.stats.packets_replayed.is_multiple_of(100) {
             debug!("Replayed {} packets", self.stats.packets_replayed);
         }
         

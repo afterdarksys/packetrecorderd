@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::sync::{Arc, Mutex};
@@ -56,7 +57,7 @@ impl PacketWriter for DatabaseWriter {
             .context("Failed to save packet to database")?;
         self.packet_count += 1;
         
-        if self.packet_count % 1000 == 0 {
+        if self.packet_count.is_multiple_of(1000) {
             debug!("Saved {} packets to database", self.packet_count);
         }
         

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub mod tls;
 pub mod http;
 pub mod dns;

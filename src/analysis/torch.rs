@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::{Context, Result};
 use tch::{CModule, Tensor};
 use super::PacketAnalyzer;
@@ -26,7 +27,7 @@ impl PacketAnalyzer for TorchModel {
         // Convert output tensor back to Vec<f32>
         // Depending on output shape, this might need adjustment. 
         // Assuming output is [1, num_classes] or [num_classes]
-        let scores = Vec::<f32>::from(&output);
+        let scores = Vec::<f32>::try_from(output)?;
         Ok(scores)
     }
 }

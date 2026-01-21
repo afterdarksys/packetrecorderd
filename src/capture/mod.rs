@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::{Context, Result};
 use pcap::{Active, Capture, Device, Packet};
 use tracing::info;
@@ -92,7 +93,7 @@ impl CaptureSession {
     }
     
     /// Get the next packet from the capture
-    pub fn next_packet(&mut self) -> Result<Packet> {
+    pub fn next_packet(&mut self) -> Result<Packet<'_>> {
         self.capture
             .next_packet()
             .context("Failed to get next packet")

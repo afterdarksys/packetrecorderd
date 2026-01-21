@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 pub mod nfs_check;
 pub mod object_store;
 

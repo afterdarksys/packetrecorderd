@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::{Context, Result};
 use object_store::{aws::AmazonS3Builder, gcp::GoogleCloudStorageBuilder, ObjectStore};
 use std::sync::Arc;
@@ -7,7 +8,7 @@ use crate::storage::nfs_check::verify_nfs_mount_options;
 #[derive(Debug, Clone, PartialEq)]
 pub enum StorageBackend {
     S3,
-    GCS,
+    Gcs,
     Local,
 }
 
@@ -17,7 +18,7 @@ impl std::str::FromStr for StorageBackend {
     fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "s3" | "oci" | "aws" => Ok(StorageBackend::S3),
-            "gcs" | "google" => Ok(StorageBackend::GCS),
+            "gcs" | "google" => Ok(StorageBackend::Gcs),
             "local" | "file" | "nfs" => Ok(StorageBackend::Local),
             _ => anyhow::bail!("Unknown storage backend: {}", s),
         }
@@ -79,7 +80,7 @@ pub fn create_object_store(config: &StorageConfig) -> Result<Arc<dyn ObjectStore
             let store = builder.build().context("Failed to build S3 object store")?;
             Ok(Arc::new(store))
         },
-        StorageBackend::GCS => {
+        StorageBackend::Gcs => {
             let bucket = config.bucket.as_deref().context("Bucket name required for GCS")?;
             let builder = GoogleCloudStorageBuilder::new()
                 .with_bucket_name(bucket);

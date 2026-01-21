@@ -4,8 +4,7 @@ pub mod cloud;
 pub mod transfer;
 
 use crate::config::signatures::Signatures;
-use crate::protocols::{ProtocolInfo, TlsInfo};
-use anyhow::Result;
+use crate::protocols::ProtocolInfo;
 use std::sync::{Arc, Mutex};
 
 pub struct ForensicsEngine {

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::{Context, Result};
 use curl::easy::Easy;
 use std::io::Write;

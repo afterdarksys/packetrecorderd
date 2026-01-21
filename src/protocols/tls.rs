@@ -1,5 +1,5 @@
-use anyhow::{Context, Result};
-use tls_parser::{parse_tls_plaintext, TlsMessage, TlsMessageHandshake, TlsExtension};
+use anyhow::Result;
+use tls_parser::{parse_tls_plaintext, TlsMessage, TlsMessageHandshake, TlsExtension, TlsExtensionType};
 use openssl::hash::{hash, MessageDigest};
 use super::{ProtocolInfo, TlsInfo};
 
@@ -42,7 +42,7 @@ impl TlsParser {
                         if let Some(extensions) = client_hello.ext {
                             if let Ok((_, exts)) = tls_parser::parse_tls_extensions(extensions) {
                                 for ext in exts {
-                                    let ext_type = u16::from(ext.clone()); // Get extension type
+                                    let ext_type = u16::from(TlsExtensionType::from(&ext)); // Get extension type
                                     
                                     if !GREASE_VALUES.contains(&ext_type) {
                                         ja3_extensions.push(ext_type.to_string());
@@ -56,7 +56,7 @@ impl TlsParser {
                                         },
                                         TlsExtension::EllipticCurves(curves) => {
                                             for curve in curves {
-                                                let c = u16::from(curve);
+                                                let c = curve.0;
                                                 if !GREASE_VALUES.contains(&c) {
                                                     ja3_curves.push(c.to_string());
                                                 }
@@ -86,7 +86,7 @@ impl TlsParser {
 
                         // MD5 Hash
                         let ja3_hash = hash(MessageDigest::md5(), ja3_string.as_bytes())
-                            .map(|d| hex::encode(d))
+                            .map(hex::encode)
                             .ok();
 
                         return Ok(ProtocolInfo::Tls(TlsInfo {

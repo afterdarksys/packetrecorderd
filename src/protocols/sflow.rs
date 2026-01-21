@@ -3,7 +3,7 @@ use nom::{
     number::complete::{be_u32},
     IResult,
 };
-use super::{ProtocolInfo, ProtocolParser};
+use super::ProtocolInfo;
 
 // Basic sFlow v5 parser implementation since a stable crate is not always available.
 // sFlow structure:
