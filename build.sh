@@ -20,6 +20,22 @@ warn() {
     echo -e "${YELLOW}[WARN]${NC} $1"
 }
 
+# Usage Help
+usage() {
+    echo "Usage: ./build.sh [option]"
+    echo "Options:"
+    echo "  release (default)  Build release binary"
+    echo "  debug              Build debug binary"
+    echo "  test               Run tests"
+    echo "  clean              Clean build artifacts"
+    echo "  help               Show this help message"
+}
+
+if [ "$1" == "help" ] || [ "$1" == "--help" ] || [ "$1" == "-h" ]; then
+    usage
+    exit 0
+fi
+
 # OS Detection
 OS="$(uname -s)"
 log "Detected OS: $OS"
@@ -88,11 +104,19 @@ fi
 
 # Build
 BUILD_TYPE="release"
+CMD="cargo build --release"
+
 if [ "$1" == "debug" ]; then
     BUILD_TYPE="debug"
     CMD="cargo build"
-else
-    CMD="cargo build --release"
+elif [ "$1" == "test" ]; then
+    log "Running tests..."
+    cargo test
+    exit $?
+elif [ "$1" == "clean" ]; then
+    log "Cleaning build artifacts..."
+    cargo clean
+    exit $?
 fi
 
 log "Starting build ($BUILD_TYPE)..."
@@ -100,11 +124,21 @@ $CMD
 
 log "Build complete!"
 if [ "$BUILD_TYPE" == "release" ]; then
-    if [ -f "target/release/packetrecorder" ]; then
-        log "Binary available at: target/release/packetrecorder"
-    fi
+    BIN_PATH="target/release/packetrecorder"
 else
-    if [ -f "target/debug/packetrecorder" ]; then
-        log "Binary available at: target/debug/packetrecorder"
+    BIN_PATH="target/debug/packetrecorder"
+fi
+
+if [ -f "$BIN_PATH" ]; then
+    log "Binary available at: $BIN_PATH"
+    
+    # Capability check for Linux
+    if [ "$OS" = "Linux" ]; then
+        if command -v setcap &> /dev/null; then
+            echo ""
+            warn "Packet capture requires elevated privileges or capabilities."
+            echo "To run without sudo, execute:"
+            echo "  sudo setcap cap_net_raw,cap_net_admin=eip $BIN_PATH"
+        fi
     fi
 fi
