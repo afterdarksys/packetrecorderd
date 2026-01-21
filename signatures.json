@@ -1,0 +1,47 @@
+{
+  "tor": {
+    "ja3_hashes": [
+      "e7d705a3286e19ea42f55819079acc13",
+      "6734f37431670b3ab4292b8f60f29984"
+    ],
+    "sni_suffixes": [
+      "torproject.org"
+    ]
+  },
+  "chat": {
+    "discord": {
+      "sni_suffixes": ["discord.gg", "discordapp.com", "discord.com"],
+      "ports": [443]
+    },
+    "signal": {
+      "sni_suffixes": ["signal.org", "whispersystems.org"],
+      "ports": [443, 80, 4433]
+    },
+    "facebook_messenger": {
+      "sni_suffixes": ["mqtt.facebook.com", "messenger.com"],
+      "ports": [443, 5222]
+    },
+    "imessage": {
+      "sni_suffixes": ["push.apple.com", "ess.apple.com"],
+      "ports": [5223, 443]
+    }
+  },
+  "cloud_storage": {
+    "google_drive": {
+      "sni_suffixes": ["drive.google.com", "docs.google.com", "googleusercontent.com"],
+      "ports": [443]
+    },
+    "icloud_drive": {
+      "sni_suffixes": ["icloud.com", "icloud-content.com", "ubiquity.icloud.com"],
+      "ports": [443]
+    },
+    "onedrive": {
+      "sni_suffixes": ["onedrive.live.com", "sharepoint.com", "1drv.ms", "my.sharepoint.com"],
+      "ports": [443]
+    }
+  },
+  "transfer": {
+    "high_volume_threshold_bytes": 104857600,
+    "large_packet_ratio_threshold": 0.8
+  }
+}

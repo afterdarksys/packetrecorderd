@@ -2,6 +2,11 @@ mod capture;
 mod cli;
 mod replay;
 mod storage;
+mod protocols;
+mod config;
+mod forensics;
+mod decoders;
+mod analysis;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -75,8 +80,29 @@ fn cmd_list_interfaces() -> Result<()> {
 async fn cmd_capture(args: cli::CaptureArgs) -> Result<()> {
     use capture::writer::{AsyncPacketWriter, DatabaseWriter};
     use capture::{CaptureConfig, CaptureSession};
+    use config::signatures::Signatures;
+    use forensics::{ForensicsEngine, ForensicsAlert};
+    use protocols::{tls::TlsParser, ProtocolParser};
     
     info!("Starting packet capture on interface: {}", args.interface);
+
+    // Load signatures
+    let signatures = match Signatures::load("signatures.json") {
+        Ok(s) => {
+            info!("Loaded signatures from signatures.json");
+            s
+        },
+        Err(e) => {
+            tracing::warn!("Failed to load signatures.json: {}. Forensics will be limited.", e);
+            // Return or create default/empty signatures? 
+            // For now, let's just fail if we can't load, or maybe make it optional.
+            // But the user requested this feature.
+            return Err(e);
+        }
+    };
+
+    let forensics = ForensicsEngine::new(signatures);
+    let tls_parser = TlsParser::new();
     
     // Open database
     let store = Arc::new(Mutex::new(PacketStore::new(&args.database)
@@ -130,11 +156,74 @@ async fn cmd_capture(args: cli::CaptureArgs) -> Result<()> {
                 let timestamp = Utc::now();
                 let data = packet.data.to_vec();
                 
-                if let Err(e) = writer.write_packet(timestamp, data).await {
+                if let Err(e) = writer.write_packet(timestamp, data.clone()).await {
                     error!("Failed to write packet: {:?}", e);
                 }
                 
-                packet_count += 1;
+                // Analysis
+                if let Ok(sliced) = etherparse::SlicedPacket::from_ethernet(&data) {
+                    let mut src_ip = "0.0.0.0".to_string();
+                    let mut dst_ip = "0.0.0.0".to_string();
+                    let mut src_port = 0;
+                    let mut dst_port = 0;
+                    let mut payload = &[];
+
+                    if let Some(ip) = sliced.ip {
+                        match ip {
+                            etherparse::InternetSlice::Ipv4(ipv4, _) => {
+                                src_ip = ipv4.source_addr().to_string();
+                                dst_ip = ipv4.destination_addr().to_string();
+                            },
+                            etherparse::InternetSlice::Ipv6(ipv6, _) => {
+                                src_ip = ipv6.source_addr().to_string();
+                                dst_ip = ipv6.destination_addr().to_string();
+                            }
+                        }
+                    }
+
+                    if let Some(transport) = sliced.transport {
+                         match transport {
+                             etherparse::TransportSlice::Tcp(tcp) => {
+                                 src_port = tcp.source_port();
+                                 dst_port = tcp.destination_port();
+                                 payload = sliced.payload;
+                             },
+                             etherparse::TransportSlice::Udp(udp) => {
+                                 src_port = udp.source_port();
+                                 dst_port = udp.destination_port();
+                                 payload = sliced.payload;
+                             },
+                             _ => {}
+                         }
+                    }
+
+                    if !payload.is_empty() {
+                         // Try TLS parsing
+                         let protocol_info = if let Ok(info) = tls_parser.parse(payload) {
+                             info
+                         } else {
+                             protocols::ProtocolInfo::Unknown
+                         };
+
+                         let alerts = forensics.analyze(&src_ip, &dst_ip, src_port, dst_port, &protocol_info, data.len());
+                         for alert in alerts {
+                             match alert {
+                                 ForensicsAlert::TorDetected { src_ip, dst_ip, reason } => {
+                                     tracing::warn!("TOR DETECTED: {} -> {}: {}", src_ip, dst_ip, reason);
+                                 },
+                                 ForensicsAlert::ChatDetected { src_ip, dst_ip, app, protocol } => {
+                                     info!("CHAT DETECTED: {} -> {}: App={}, Proto={}", src_ip, dst_ip, app, protocol);
+                                 },
+                                 ForensicsAlert::CloudStorageDetected { src_ip, dst_ip, service } => {
+                                     tracing::warn!("CLOUD STORAGE DETECTED: {} -> {}: Service={}", src_ip, dst_ip, service);
+                                 },
+                                 ForensicsAlert::HighVolumeTransfer { src_ip, dst_ip, bytes } => {
+                                     info!("TRANSFER DETECTED: {} -> {}: {} bytes", src_ip, dst_ip, bytes);
+                                 }
+                             }
+                         }
+                    }
+                }
                 
                 if packet_count % 1000 == 0 {
                     info!("Captured {} packets", packet_count);

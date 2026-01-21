@@ -1,3 +1,6 @@
+pub mod nfs_check;
+pub mod object_store;
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
