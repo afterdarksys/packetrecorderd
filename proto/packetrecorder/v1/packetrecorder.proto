@@ -1,0 +1,147 @@
+syntax = "proto3";
+
+package packetrecorder.v1;
+
+service PacketRecorder {
+  rpc ListInterfaces(ListInterfacesRequest) returns (ListInterfacesResponse);
+  rpc StartCapture(StartCaptureRequest) returns (StartCaptureResponse);
+  rpc StopCapture(StopCaptureRequest) returns (StopCaptureResponse);
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc DownloadPcap(DownloadPcapRequest) returns (stream DownloadPcapResponse);
+  rpc LookupAttribution(LookupAttributionRequest) returns (LookupAttributionResponse);
+  rpc ListApiKeys(ListApiKeysRequest) returns (ListApiKeysResponse);
+  rpc AddApiKey(AddApiKeyRequest) returns (AddApiKeyResponse);
+  rpc RemoveApiKey(RemoveApiKeyRequest) returns (RemoveApiKeyResponse);
+}
+
+message ListInterfacesRequest {}
+
+message NetworkInterface {
+  string name = 1;
+  string description = 2;
+  repeated string addresses = 3;
+}
+
+message ListInterfacesResponse {
+  repeated NetworkInterface interfaces = 1;
+}
+
+message StartCaptureRequest {
+  string interface = 1;
+  string filter = 2;
+  string database_path = 3;
+  uint64 max_packets = 4;
+  uint64 max_duration_seconds = 5;
+  int32 snaplen = 6;
+  bool promisc = 7;
+  int32 buffer_size = 8;
+}
+
+message StartCaptureResponse {
+  string session_id = 1;
+}
+
+message StopCaptureRequest {
+  string session_id = 1;
+}
+
+message StopCaptureResponse {
+  bool stopped = 1;
+}
+
+message GetSessionRequest {
+  string session_id = 1;
+  string database_path = 2;
+}
+
+message Session {
+  string id = 1;
+  string interface = 2;
+  string filter = 3;
+  string start_time_rfc3339 = 4;
+  string end_time_rfc3339 = 5;
+  int64 packet_count = 6;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message ListSessionsRequest {
+  string database_path = 1;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+}
+
+message DownloadPcapRequest {
+  string session_id = 1;
+  string database_path = 2;
+  int64 limit_packets = 3;
+}
+
+message DownloadPcapResponse {
+  bytes chunk = 1;
+}
+
+enum IpProto {
+  IP_PROTO_UNSPECIFIED = 0;
+  IP_PROTO_TCP = 1;
+  IP_PROTO_UDP = 2;
+}
+
+message FlowTuple {
+  IpProto proto = 1;
+  string src_ip = 2;
+  uint32 src_port = 3;
+  string dst_ip = 4;
+  uint32 dst_port = 5;
+}
+
+message ProcessAttribution {
+  int32 pid = 1;
+  uint32 uid = 2;
+  string process = 3;
+  string bundle_id = 4;
+  string signing_id = 5;
+  string timestamp_rfc3339 = 6;
+}
+
+message LookupAttributionRequest {
+  FlowTuple flow = 1;
+}
+
+message LookupAttributionResponse {
+  bool found = 1;
+  ProcessAttribution attribution = 2;
+}
+
+message ListApiKeysRequest {}
+
+message ApiKeyInfo {
+  string sha256_prefix = 1;
+  string source = 2;
+}
+
+message ListApiKeysResponse {
+  repeated ApiKeyInfo keys = 1;
+}
+
+message AddApiKeyRequest {
+  string key = 1;
+}
+
+message AddApiKeyResponse {
+  string sha256_prefix = 1;
+}
+
+message RemoveApiKeyRequest {
+  string key = 1;
+}
+
+message RemoveApiKeyResponse {
+  bool removed = 1;
+  string sha256_prefix = 2;
+}

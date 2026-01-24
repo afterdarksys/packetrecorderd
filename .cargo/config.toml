@@ -1,3 +1,5 @@
 [env]
+LIBTORCH = "/Users/ryan/Library/Python/3.9/lib/python/site-packages/torch"
 LIBTORCH_USE_PYTORCH = "1"
 LIBTORCH_BYPASS_VERSION_CHECK = "1"
+DYLD_LIBRARY_PATH = "/Users/ryan/Library/Python/3.9/lib/python/site-packages/torch/lib"

@@ -76,8 +76,99 @@ impl PacketWriter for DatabaseWriter {
     }
 }
 
-// Note: PcapWriter removed due to pcap crate API limitations
-// For pcap file output, consider using pcap-file crate instead
+/// Writer that saves packets to a PCAP file
+pub struct PcapWriter {
+    writer: pcap_file::pcap::PcapWriter<std::fs::File>,
+    packet_count: u64,
+}
+
+impl PcapWriter {
+    /// Create a new PCAP writer
+    pub fn new(path: &std::path::Path) -> Result<Self> {
+        let file = std::fs::File::create(path)
+            .context("Failed to create PCAP file")?;
+        
+        let writer = pcap_file::pcap::PcapWriter::new(file)
+            .context("Failed to create PCAP writer")?;
+        
+        info!("Created PCAP writer: {:?}", path);
+        
+        Ok(Self {
+            writer,
+            packet_count: 0,
+        })
+    }
+    
+    /// Get the number of packets written
+    pub fn packet_count(&self) -> u64 {
+        self.packet_count
+    }
+}
+
+impl PacketWriter for PcapWriter {
+    fn write_packet(&mut self, timestamp: DateTime<Utc>, data: &[u8]) -> Result<()> {
+        // Convert timestamp to Duration since UNIX epoch
+        let duration = std::time::Duration::from_micros(timestamp.timestamp_micros() as u64);
+        
+        let packet = pcap_file::pcap::PcapPacket::new(duration, data.len() as u32, data);
+        
+        self.writer.write_packet(&packet)
+            .context("Failed to write packet to PCAP file")?;
+        
+        self.packet_count += 1;
+        
+        if self.packet_count.is_multiple_of(1000) {
+            debug!("Saved {} packets to PCAP file", self.packet_count);
+        }
+        
+        Ok(())
+    }
+    
+    fn flush(&mut self) -> Result<()> {
+        // Flush is handled automatically by the writer
+        Ok(())
+    }
+    
+    fn close(&mut self) -> Result<()> {
+        info!("Closing PCAP writer, {} packets saved", self.packet_count);
+        Ok(())
+    }
+}
+
+/// Writer that writes to multiple destinations
+pub struct MultiWriter {
+    writers: Vec<Box<dyn PacketWriter>>,
+}
+
+impl MultiWriter {
+    /// Create a new multi-writer
+    pub fn new(writers: Vec<Box<dyn PacketWriter>>) -> Self {
+        Self { writers }
+    }
+}
+
+impl PacketWriter for MultiWriter {
+    fn write_packet(&mut self, timestamp: DateTime<Utc>, data: &[u8]) -> Result<()> {
+        for writer in &mut self.writers {
+            writer.write_packet(timestamp, data)?;
+        }
+        Ok(())
+    }
+    
+    fn flush(&mut self) -> Result<()> {
+        for writer in &mut self.writers {
+            writer.flush()?;
+        }
+        Ok(())
+    }
+    
+    fn close(&mut self) -> Result<()> {
+        for writer in &mut self.writers {
+            writer.close()?;
+        }
+        Ok(())
+    }
+}
 
 /// Async wrapper for packet writers
 pub struct AsyncPacketWriter {

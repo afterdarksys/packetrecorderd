@@ -37,16 +37,26 @@ pub struct PacketStore {
 
 impl PacketStore {
     /// Create a new packet store or open an existing one
-    pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(db_path: P, encryption_key: Option<&str>) -> Result<Self> {
         let conn = Connection::open(db_path).context("Failed to open database")?;
+        
+        if let Some(key) = encryption_key {
+            conn.pragma_update(None, "key", &key).context("Failed to set encryption key")?;
+        }
+        
         let store = Self { conn };
         store.initialize_schema()?;
         Ok(store)
     }
 
     /// Create an in-memory database (useful for testing)
-    pub fn new_in_memory() -> Result<Self> {
+    pub fn new_in_memory(encryption_key: Option<&str>) -> Result<Self> {
         let conn = Connection::open_in_memory().context("Failed to create in-memory database")?;
+        
+        if let Some(key) = encryption_key {
+            conn.pragma_update(None, "key", &key).context("Failed to set encryption key")?;
+        }
+        
         let store = Self { conn };
         store.initialize_schema()?;
         Ok(store)
@@ -229,6 +239,37 @@ impl PacketStore {
         Ok(packets)
     }
 
+    pub fn for_each_packet<F>(&self, session_id: &str, limit: Option<i64>, mut f: F) -> Result<()>
+    where
+        F: FnMut(DateTime<Utc>, Vec<u8>) -> Result<()>,
+    {
+        let query = if let Some(lim) = limit {
+            format!(
+                "SELECT timestamp, data 
+                 FROM packets WHERE session_id = ?1 
+                 ORDER BY timestamp ASC LIMIT {}",
+                lim
+            )
+        } else {
+            "SELECT timestamp, data 
+             FROM packets WHERE session_id = ?1 
+             ORDER BY timestamp ASC"
+                .to_string()
+        };
+
+        let mut stmt = self.conn.prepare(&query)?;
+        let mut rows = stmt.query(params![session_id])?;
+
+        while let Some(row) = rows.next()? {
+            let ts: String = row.get(0)?;
+            let timestamp: DateTime<Utc> = ts.parse().unwrap();
+            let data: Vec<u8> = row.get(1)?;
+            f(timestamp, data)?;
+        }
+
+        Ok(())
+    }
+
     /// Get total number of packets in database
     pub fn get_total_packet_count(&self) -> Result<i64> {
         let count: i64 = self.conn.query_row(
@@ -246,13 +287,13 @@ mod tests {
 
     #[test]
     fn test_create_store() {
-        let store = PacketStore::new_in_memory();
+        let store = PacketStore::new_in_memory(None);
         assert!(store.is_ok());
     }
 
     #[test]
     fn test_create_session() {
-        let store = PacketStore::new_in_memory().unwrap();
+        let store = PacketStore::new_in_memory(None).unwrap();
         let session_id = store.create_session("eth0", Some("tcp port 80"));
         assert!(session_id.is_ok());
         
@@ -268,7 +309,7 @@ mod tests {
 
     #[test]
     fn test_save_and_retrieve_packets() {
-        let store = PacketStore::new_in_memory().unwrap();
+        let store = PacketStore::new_in_memory(None).unwrap();
         let session_id = store.create_session("eth0", None).unwrap();
         
         let packet_data = vec![0x01, 0x02, 0x03, 0x04];
@@ -287,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_end_session() {
-        let store = PacketStore::new_in_memory().unwrap();
+        let store = PacketStore::new_in_memory(None).unwrap();
         let session_id = store.create_session("eth0", None).unwrap();
         
         let session = store.get_session(&session_id).unwrap().unwrap();

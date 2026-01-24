@@ -2,6 +2,7 @@ use anyhow::Result;
 use tls_parser::{parse_tls_plaintext, TlsMessage, TlsMessageHandshake, TlsExtension, TlsExtensionType};
 use openssl::hash::{hash, MessageDigest};
 use super::{ProtocolInfo, TlsInfo};
+use x509_parser::prelude::*;
 
 pub struct TlsParser;
 
@@ -93,8 +94,55 @@ impl TlsParser {
                             version: format!("{:?}", client_hello.version),
                             sni,
                             ja3: ja3_hash,
-                            ja3_string: Some(ja3_string), 
+                            ja3_string: Some(ja3_string),
+                            server_certificates: None,
                         }));
+                    }
+                    
+                    // Parse Server Hello / Certificate
+                    if let TlsMessage::Handshake(TlsMessageHandshake::Certificate(cert_msg)) = msg {
+                        let mut cert_names = Vec::new();
+                        
+                        // cert_msg.cert_chain is Vec<(u32, Vec<u8>)> usually? 
+                        // tls-parser 0.11: Certificate(TlsCertificate)
+                        // TlsCertificate { cert_chain: Vec<RawCertificate> }
+                        // RawCertificate { data: &[u8] }
+                        
+                        for cert_data in &cert_msg.cert_chain {
+                             if let Ok((_, x509)) = X509Certificate::from_der(cert_data.data) {
+                                 // Get Subject Common Name
+                                 for cn in x509.subject().iter_common_name() {
+                                     if let Ok(s) = cn.as_str() {
+                                         cert_names.push(format!("CN={}", s));
+                                     }
+                                 }
+                                 
+                                 // Get SANs
+                                 if let Ok(Some(sans)) = x509.subject_alternative_name() {
+                                     for name in &sans.value.general_names {
+                                         match name {
+                                             GeneralName::DNSName(dns) => {
+                                                 cert_names.push(format!("SAN=DNS:{}", dns));
+                                             },
+                                             GeneralName::IPAddress(ip) => {
+                                                 cert_names.push(format!("SAN=IP:{:?}", ip));
+                                             },
+                                             _ => {}
+                                         }
+                                     }
+                                 }
+                             }
+                        }
+
+                        if !cert_names.is_empty() {
+                            return Ok(ProtocolInfo::Tls(TlsInfo {
+                                version: "ServerCertificate".to_string(),
+                                sni: None,
+                                ja3: None,
+                                ja3_string: None,
+                                server_certificates: Some(cert_names),
+                            }));
+                        }
                     }
                 }
                 Ok(ProtocolInfo::Unknown)

@@ -1,0 +1,533 @@
+    Updating crates.io index
+     Locking 23 packages to latest compatible versions
+      Adding base64 v0.22.1
+      Adding candle-transformers v0.3.3 (available: v0.9.2)
+      Adding console v0.15.11
+      Adding dirs v5.0.1
+      Adding dirs-sys v0.4.1
+      Adding encode_unicode v1.0.0
+      Adding hf-hub v0.3.2 (available: v0.4.3)
+      Adding indicatif v0.17.11
+      Adding libredox v0.1.12
+      Adding number_prefix v0.4.0
+      Adding option-ext v0.2.0
+      Adding portable-atomic v1.13.0
+      Adding redox_users v0.4.6
+      Adding riff v1.0.1
+      Adding rustls v0.23.36
+      Adding rustls-webpki v0.103.9
+      Adding serde_plain v1.0.2
+      Adding unicode-width v0.2.2
+      Adding ureq v2.12.1
+      Adding wav v1.0.1
+      Adding web-time v1.1.0
+      Adding webpki-roots v0.26.11
+      Adding webpki-roots v1.0.5
+ Downloading crates ...
+  Downloaded webpki-roots v0.26.11
+  Downloaded dirs v5.0.1
+  Downloaded number_prefix v0.4.0
+  Downloaded dirs-sys v0.4.1
+  Downloaded serde_plain v1.0.2
+  Downloaded hf-hub v0.3.2
+  Downloaded option-ext v0.2.0
+  Downloaded riff v1.0.1
+  Downloaded base64 v0.22.1
+  Downloaded rustls-webpki v0.103.9
+  Downloaded indicatif v0.17.11
+  Downloaded ureq v2.12.1
+  Downloaded console v0.15.11
+  Downloaded candle-transformers v0.3.3
+  Downloaded portable-atomic v1.13.0
+  Downloaded unicode-width v0.2.2
+  Downloaded webpki-roots v1.0.5
+  Downloaded rustls v0.23.36
+  Downloaded wav v1.0.1
+   Compiling portable-atomic v1.13.0
+   Compiling rustls v0.23.36
+    Checking webpki-roots v1.0.5
+    Checking rustls-webpki v0.103.9
+    Checking unicode-width v0.2.2
+    Checking option-ext v0.2.0
+    Checking riff v1.0.1
+    Checking base64 v0.22.1
+    Checking number_prefix v0.4.0
+    Checking serde_plain v1.0.2
+    Checking dirs-sys v0.4.1
+    Checking webpki-roots v0.26.11
+    Checking wav v1.0.1
+    Checking console v0.15.11
+    Checking dirs v5.0.1
+    Checking candle-transformers v0.3.3
+    Checking indicatif v0.17.11
+    Checking ureq v2.12.1
+    Checking hf-hub v0.3.2
+    Checking packetrecorder v0.1.0 (/Users/ryan/development/experiments-no-claude/packetrecorderd)
+warning: unused imports: `RepoType`, `Repo`, and `api::sync::Api`
+ --> src/ml/mod.rs:6:14
+  |
+6 | use hf_hub::{api::sync::Api, Repo, RepoType};
+  |              ^^^^^^^^^^^^^^  ^^^^  ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `Mutex`
+ --> src/ml/mod.rs:8:22
+  |
+8 | use std::sync::{Arc, Mutex};
+  |                      ^^^^^
+
+warning: unused import: `gossip::GossipService`
+ --> src/swarm/mod.rs:3:9
+  |
+3 | pub use gossip::GossipService;
+  |         ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `gossip::ThreatIndicator`
+ --> src/swarm/mod.rs:4:9
+  |
+4 | pub use gossip::ThreatIndicator;
+  |         ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unreachable pattern
+   --> src/processing.rs:317:21
+    |
+317 |                     _ => {}
+    |                     ^ no value can reach this
+    |
+note: multiple earlier patterns match some of the same values
+   --> src/processing.rs:317:21
+    |
+206 |                     etherparse::TransportSlice::Tcp(tcp) => {
+    |                     ------------------------------------ matches some of the same values
+...
+246 |                     etherparse::TransportSlice::Udp(udp) => {
+    |                     ------------------------------------ matches some of the same values
+...
+297 |                     etherparse::TransportSlice::Icmpv4(icmp) => {
+    |                     ---------------------------------------- matches some of the same values
+...
+307 |                     etherparse::TransportSlice::Icmpv6(icmp) => {
+    |                     ---------------------------------------- matches some of the same values
+...
+317 |                     _ => {}
+    |                     ^ collectively making this unreachable
+    = note: `#[warn(unreachable_patterns)]` on by default
+
+warning: variable `l4_protocol` is assigned to, but never used
+   --> src/processing.rs:174:21
+    |
+174 |             let mut l4_protocol = "Unknown";
+    |                     ^^^^^^^^^^^
+    |
+    = note: consider using `_l4_protocol` instead
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: value assigned to `l4_protocol` is never read
+   --> src/processing.rs:210:25
+    |
+210 |                         l4_protocol = "TCP";
+    |                         ^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` on by default
+
+warning: value assigned to `l4_protocol` is never read
+   --> src/processing.rs:243:29
+    |
+243 | ...                   l4_protocol = "DOT (TCP)";
+    |                       ^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: value assigned to `l4_protocol` is never read
+   --> src/processing.rs:250:25
+    |
+250 |                         l4_protocol = "UDP";
+    |                         ^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: value assigned to `l4_protocol` is never read
+   --> src/processing.rs:298:25
+    |
+298 |                         l4_protocol = "ICMPv4";
+    |                         ^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: value assigned to `l4_protocol` is never read
+   --> src/processing.rs:308:25
+    |
+308 |                         l4_protocol = "ICMPv6";
+    |                         ^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: value assigned to `l4_protocol` is never read
+   --> src/processing.rs:323:25
+    |
+323 |                         l4_protocol = "OSPF";
+    |                         ^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: value assigned to `l4_protocol` is never read
+   --> src/processing.rs:332:25
+    |
+332 |                         l4_protocol = "EIGRP";
+    |                         ^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: unreachable pattern
+   --> src/manage.rs:365:21
+    |
+365 |                     _ => {}
+    |                     ^ no value can reach this
+    |
+note: multiple earlier patterns match some of the same values
+   --> src/manage.rs:365:21
+    |
+344 |                     etherparse::TransportSlice::Tcp(tcp) => {
+    |                     ------------------------------------ matches some of the same values
+...
+355 |                     etherparse::TransportSlice::Udp(udp) => {
+    |                     ------------------------------------ matches some of the same values
+...
+359 |                     etherparse::TransportSlice::Icmpv4(icmp) => {
+    |                     ---------------------------------------- matches some of the same values
+...
+362 |                     etherparse::TransportSlice::Icmpv6(icmp) => {
+    |                     ---------------------------------------- matches some of the same values
+...
+365 |                     _ => {}
+    |                     ^ collectively making this unreachable
+
+warning: fields `dnsscience_api_key` and `dnsscience_base_url` are never read
+ --> src/config/api_keys.rs:5:9
+  |
+4 | pub struct ApiConfig {
+  |            --------- fields in this struct
+5 |     pub dnsscience_api_key: Option<String>,
+  |         ^^^^^^^^^^^^^^^^^^
+6 |     pub dnsscience_base_url: String,
+  |         ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `ApiConfig` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+  = note: `#[warn(dead_code)]` on by default
+
+warning: methods `has_dnsscience` and `has_darkapi` are never used
+  --> src/config/api_keys.rs:23:12
+   |
+11 | impl ApiConfig {
+   | -------------- methods in this implementation
+...
+23 |     pub fn has_dnsscience(&self) -> bool {
+   |            ^^^^^^^^^^^^^^
+...
+27 |     pub fn has_darkapi(&self) -> bool {
+   |            ^^^^^^^^^^^
+
+warning: fields `darkapi_client` and `api_config` are never read
+  --> src/forensics/mod.rs:21:5
+   |
+18 | pub struct ForensicsEngine {
+   |            --------------- fields in this struct
+...
+21 |     darkapi_client: Option<StdArc<darkapi::DarkApiClient>>,
+   |     ^^^^^^^^^^^^^^
+22 |     fast_flux_detector: Arc<Mutex<dns_threats::FastFluxDetector>>,
+23 |     api_config: ApiConfig,
+   |     ^^^^^^^^^^
+   |
+   = note: `ForensicsEngine` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: variants `MaliciousIp` and `MaliciousDomain` are never constructed
+  --> src/forensics/mod.rs:49:5
+   |
+27 | pub enum ForensicsAlert {
+   |          -------------- variants in this enum
+...
+49 |     MaliciousIp {
+   |     ^^^^^^^^^^^
+...
+55 |     MaliciousDomain {
+   |     ^^^^^^^^^^^^^^^
+   |
+   = note: `ForensicsAlert` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `ThreatIntelResponse` is never constructed
+ --> src/forensics/darkapi.rs:6:12
+  |
+6 | pub struct ThreatIntelResponse {
+  |            ^^^^^^^^^^^^^^^^^^^
+
+warning: struct `IpReputationResponse` is never constructed
+  --> src/forensics/darkapi.rs:20:12
+   |
+20 | pub struct IpReputationResponse {
+   |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `api_key`, `base_url`, and `client` are never read
+  --> src/forensics/darkapi.rs:35:5
+   |
+34 | pub struct DarkApiClient {
+   |            ------------- fields in this struct
+35 |     api_key: String,
+   |     ^^^^^^^
+36 |     base_url: String,
+   |     ^^^^^^^^
+37 |     client: reqwest::Client,
+   |     ^^^^^^
+
+warning: methods `lookup_ip`, `lookup_domain`, `lookup_ips_bulk`, and `check_url` are never used
+   --> src/forensics/darkapi.rs:53:18
+    |
+ 40 | impl DarkApiClient {
+    | ------------------ methods in this implementation
+...
+ 53 |     pub async fn lookup_ip(&self, ip: &str) -> Result<IpReputationResponse> {
+    |                  ^^^^^^^^^
+...
+ 85 |     pub async fn lookup_domain(&self, domain: &str) -> Result<ThreatIntelResponse> {
+    |                  ^^^^^^^^^^^^^
+...
+115 |     pub async fn lookup_ips_bulk(&self, ips: &[String]) -> Result<HashMap<String, IpReputationResponse>> {
+    |                  ^^^^^^^^^^^^^^^
+...
+139 |     pub async fn check_url(&self, url: &str) -> Result<ThreatIntelResponse> {
+    |                  ^^^^^^^^^
+
+warning: struct `TrafficClassification` is never constructed
+ --> src/forensics/dnsscience.rs:5:12
+  |
+5 | pub struct TrafficClassification {
+  |            ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `DnsIntelligence` is never constructed
+  --> src/forensics/dnsscience.rs:20:12
+   |
+20 | pub struct DnsIntelligence {
+   |            ^^^^^^^^^^^^^^^
+
+warning: struct `DnsScienceClient` is never constructed
+  --> src/forensics/dnsscience.rs:30:12
+   |
+30 | pub struct DnsScienceClient {
+   |            ^^^^^^^^^^^^^^^^
+
+warning: associated items `new`, `classify_ip`, `analyze_domain`, `classify_ips_bulk`, and `check_dns_patterns` are never used
+   --> src/forensics/dnsscience.rs:37:12
+    |
+ 36 | impl DnsScienceClient {
+    | --------------------- associated items in this implementation
+ 37 |     pub fn new(api_key: String, base_url: String) -> Self {
+    |            ^^^
+...
+ 49 |     pub async fn classify_ip(&self, ip: &str) -> Result<TrafficClassification> {
+    |                  ^^^^^^^^^^^
+...
+ 86 |     pub async fn analyze_domain(&self, domain: &str) -> Result<DnsIntelligence> {
+    |                  ^^^^^^^^^^^^^^
+...
+118 |     pub async fn classify_ips_bulk(&self, ips: &[String]) -> Result<Vec<TrafficClassification>> {
+    |                  ^^^^^^^^^^^^^^^^^
+...
+142 |     pub async fn check_dns_patterns(&self, domain: &str) -> Result<DnsIntelligence> {
+    |                  ^^^^^^^^^^^^^^^^^^
+
+warning: method `cleanup_old_entries` is never used
+   --> src/forensics/dns_threats.rs:154:12
+    |
+ 97 | impl FastFluxDetector {
+    | --------------------- method in this implementation
+...
+154 |     pub fn cleanup_old_entries(&mut self) {
+    |            ^^^^^^^^^^^^^^^^^^^
+
+warning: multiple variants are never constructed
+  --> src/forensics/ip_reputation.rs:5:5
+   |
+ 4 | pub enum NetworkType {
+   |          ----------- variants in this enum
+ 5 |     Residential,
+   |     ^^^^^^^^^^^
+ 6 |     Datacenter,
+   |     ^^^^^^^^^^
+...
+ 9 |     Education,
+   |     ^^^^^^^^^
+10 |     Mobile,
+   |     ^^^^^^
+11 |     Vpn,
+   |     ^^^
+12 |     Proxy,
+   |     ^^^^^
+13 |     Tor,
+   |     ^^^
+   |
+   = note: `NetworkType` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `IpReputation` is never constructed
+  --> src/forensics/ip_reputation.rs:18:12
+   |
+18 | pub struct IpReputation {
+   |            ^^^^^^^^^^^^
+
+warning: function `analyze_bot_behavior` is never used
+   --> src/forensics/ip_reputation.rs:175:8
+    |
+175 | pub fn analyze_bot_behavior(requests_per_second: f64, distinct_paths: usize, total_requests: usize) -> Option<String> {
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: enum `ApiLookupRequest` is never used
+  --> src/forensics/api_lookup.rs:12:10
+   |
+12 | pub enum ApiLookupRequest {
+   |          ^^^^^^^^^^^^^^^^
+
+warning: enum `ApiLookupResponse` is never used
+  --> src/forensics/api_lookup.rs:20:10
+   |
+20 | pub enum ApiLookupResponse {
+   |          ^^^^^^^^^^^^^^^^^
+
+warning: struct `CachedResponse` is never constructed
+  --> src/forensics/api_lookup.rs:29:8
+   |
+29 | struct CachedResponse {
+   |        ^^^^^^^^^^^^^^
+
+warning: struct `ApiLookupHandler` is never constructed
+  --> src/forensics/api_lookup.rs:35:12
+   |
+35 | pub struct ApiLookupHandler {
+   |            ^^^^^^^^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> src/forensics/api_lookup.rs:43:12
+    |
+ 41 | impl ApiLookupHandler {
+    | --------------------- associated items in this implementation
+ 42 |     /// Create new handler and spawn background worker
+ 43 |     pub fn new(darkapi_client: Option<Arc<DarkApiClient>>) -> Self {
+    |            ^^^
+...
+ 63 |     async fn worker(
+    |              ^^^^^^
+...
+144 |     fn cache_key(request: &ApiLookupRequest) -> String {
+    |        ^^^^^^^^^
+...
+153 |     pub async fn lookup(&self, request: ApiLookupRequest) -> Option<ApiLookupResponse> {
+    |                  ^^^^^^
+...
+180 |     pub async fn get_cached(&self, request: &ApiLookupRequest) -> Option<ApiLookupResponse> {
+    |                  ^^^^^^^^^^
+...
+195 |     pub async fn clear_cache(&self) {
+    |                  ^^^^^^^^^^^
+...
+201 |     pub async fn cache_stats(&self) -> (usize, usize) {
+    |                  ^^^^^^^^^^^
+
+warning: method `emit` is never used
+   --> src/api.rs:105:12
+    |
+ 94 | impl ApiState {
+    | ------------- method in this implementation
+...
+105 |     pub fn emit(&self, evt: ApiEvent) {
+    |            ^^^^
+
+warning: function `now_rfc3339` is never used
+   --> src/attribution.rs:114:8
+    |
+114 | pub fn now_rfc3339() -> String {
+    |        ^^^^^^^^^^^
+
+warning: enum `ModelFormat` is never used
+ --> src/model_manifest.rs:6:10
+  |
+6 | pub enum ModelFormat {
+  |          ^^^^^^^^^^^
+
+warning: enum `ModelTask` is never used
+  --> src/model_manifest.rs:13:10
+   |
+13 | pub enum ModelTask {
+   |          ^^^^^^^^^
+
+warning: struct `ModelArtifact` is never constructed
+  --> src/model_manifest.rs:20:12
+   |
+20 | pub struct ModelArtifact {
+   |            ^^^^^^^^^^^^^
+
+warning: struct `ModelManifest` is never constructed
+  --> src/model_manifest.rs:30:12
+   |
+30 | pub struct ModelManifest {
+   |            ^^^^^^^^^^^^^
+
+warning: function `parse_manifest` is never used
+  --> src/model_manifest.rs:37:8
+   |
+37 | pub fn parse_manifest(bytes: &[u8], content_type: Option<&str>) -> Result<ModelManifest> {
+   |        ^^^^^^^^^^^^^^
+
+warning: struct `ModelApiClient` is never constructed
+ --> src/model_client.rs:7:12
+  |
+7 | pub struct ModelApiClient {
+  |            ^^^^^^^^^^^^^^
+
+warning: associated items `new`, `manifest_url`, `artifact_url`, and `fetch_manifest` are never used
+  --> src/model_client.rs:13:12
+   |
+12 | impl ModelApiClient {
+   | ------------------- associated items in this implementation
+13 |     pub fn new(base_url: String, api_key: String) -> Self {
+   |            ^^^
+...
+17 |     pub fn manifest_url(&self) -> String {
+   |            ^^^^^^^^^^^^
+...
+21 |     pub fn artifact_url(&self, artifact_id: &str) -> String {
+   |            ^^^^^^^^^^^^
+...
+29 |     pub async fn fetch_manifest(&self) -> Result<ModelManifest> {
+   |                  ^^^^^^^^^^^^^^
+
+warning: struct `ThreatIndicator` is never constructed
+ --> src/swarm/gossip.rs:8:12
+  |
+8 | pub struct ThreatIndicator {
+  |            ^^^^^^^^^^^^^^^
+
+warning: struct `GossipService` is never constructed
+  --> src/swarm/gossip.rs:16:12
+   |
+16 | pub struct GossipService {
+   |            ^^^^^^^^^^^^^
+
+warning: associated items `new`, `add_peer`, `broadcast_threat`, and `subscribe` are never used
+  --> src/swarm/gossip.rs:22:12
+   |
+21 | impl GossipService {
+   | ------------------ associated items in this implementation
+22 |     pub fn new() -> Self {
+   |            ^^^
+...
+30 |     pub fn add_peer(&self, peer_addr: String) {
+   |            ^^^^^^^^
+...
+35 |     pub fn broadcast_threat(&self, threat: ThreatIndicator) {
+   |            ^^^^^^^^^^^^^^^^
+...
+45 |     pub fn subscribe(&self) -> broadcast::Receiver<ThreatIndicator> {
+   |            ^^^^^^^^^
+
+warning: `packetrecorder` (bin "packetrecorder") generated 47 warnings (run `cargo fix --bin "packetrecorder"` to apply 4 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 19.13s

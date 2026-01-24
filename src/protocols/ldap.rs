@@ -6,7 +6,7 @@ use nom::{
 };
 use super::{ProtocolInfo, ProtocolParser};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LdapInfo {
     pub message_id: u32,
     pub operation: String,

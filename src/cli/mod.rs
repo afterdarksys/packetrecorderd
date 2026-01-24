@@ -12,6 +12,10 @@ pub struct Cli {
     /// Enable verbose logging
     #[arg(short, long, global = true)]
     pub verbose: bool,
+
+    /// Database encryption key
+    #[arg(long, global = true, env = "PACKETRECORDER_DB_KEY")]
+    pub encryption_key: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -30,6 +34,163 @@ pub enum Commands {
     
     /// List capture sessions
     Sessions(SessionsArgs),
+    
+    /// Export a session to PCAP file
+    Export(ExportArgs),
+
+    /// Remote management CLI (gRPC client)
+    Manage(ManageArgs),
+
+    /// Run the daemon with gRPC management enabled
+    Serve(ServeArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct ManageArgs {
+    /// gRPC endpoint to connect to (e.g. 127.0.0.1:50051 or https://host:50051)
+    #[arg(long, default_value = "127.0.0.1:50051")]
+    pub endpoint: String,
+
+    /// API key for authentication (falls back to PACKETRECORDER_API_KEY)
+    #[arg(long)]
+    pub api_key: Option<String>,
+
+    #[command(subcommand)]
+    pub command: ManageCommands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ManageCommands {
+    ListInterfaces(ManageListInterfacesArgs),
+    StartCapture(ManageStartCaptureArgs),
+    StopCapture(ManageStopCaptureArgs),
+    Sessions(ManageSessionsArgs),
+    GetSession(ManageGetSessionArgs),
+    DownloadPcap(ManageDownloadPcapArgs),
+    LookupAttribution(ManageLookupAttributionArgs),
+    Keys(ManageKeysArgs),
+    InspectPcap(ManageInspectPcapArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct ManageKeysArgs {
+    #[command(subcommand)]
+    pub command: ManageKeysCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ManageKeysCommand {
+    List(ManageKeysListArgs),
+    Add(ManageKeysAddArgs),
+    Remove(ManageKeysRemoveArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct ManageKeysListArgs {}
+
+#[derive(Parser, Debug)]
+pub struct ManageKeysAddArgs {
+    #[arg(long)]
+    pub key: String,
+}
+
+#[derive(Parser, Debug)]
+pub struct ManageKeysRemoveArgs {
+    #[arg(long)]
+    pub key: String,
+}
+
+#[derive(Parser, Debug)]
+pub struct ManageListInterfacesArgs {}
+
+#[derive(Parser, Debug)]
+pub struct ManageSessionsArgs {}
+
+#[derive(Parser, Debug)]
+pub struct ManageStartCaptureArgs {
+    #[arg(long)]
+    pub interface: String,
+
+    #[arg(long)]
+    pub filter: Option<String>,
+
+    #[arg(long, default_value = "0")]
+    pub max_packets: u64,
+
+    #[arg(long, default_value = "0")]
+    pub max_duration_seconds: u64,
+
+    #[arg(long, default_value = "65535")]
+    pub snaplen: i32,
+
+    #[arg(long, default_value = "true")]
+    pub promisc: bool,
+
+    #[arg(long, default_value = "10485760")]
+    pub buffer_size: i32,
+}
+
+#[derive(Parser, Debug)]
+pub struct ManageStopCaptureArgs {
+    #[arg(long)]
+    pub session_id: String,
+}
+
+#[derive(Parser, Debug)]
+pub struct ManageGetSessionArgs {
+    #[arg(long)]
+    pub session_id: String,
+}
+
+#[derive(Parser, Debug)]
+pub struct ManageDownloadPcapArgs {
+    #[arg(long)]
+    pub session_id: String,
+
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    #[arg(long, default_value = "0")]
+    pub limit_packets: i64,
+}
+
+#[derive(Parser, Debug)]
+pub struct ManageLookupAttributionArgs {
+    #[arg(long)]
+    pub proto: String,
+
+    #[arg(long)]
+    pub src_ip: String,
+
+    #[arg(long)]
+    pub src_port: u16,
+
+    #[arg(long)]
+    pub dst_ip: String,
+
+    #[arg(long)]
+    pub dst_port: u16,
+}
+
+#[derive(Parser, Debug)]
+pub struct ManageInspectPcapArgs {
+    #[arg(long)]
+    pub path: PathBuf,
+
+    #[arg(long, default_value = "10")]
+    pub limit: usize,
+
+    #[arg(long, value_enum, default_value = "none")]
+    pub payload: crate::manage::InspectPayloadMode,
+
+    #[arg(long, default_value = "true")]
+    pub mime: bool,
+
+    #[arg(long, default_value = "false")]
+    pub gzip_decode: bool,
+
+    #[arg(long, default_value = "false")]
+    pub zip_decode: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -120,6 +281,37 @@ pub struct QueryArgs {
 #[derive(Parser, Debug)]
 pub struct SessionsArgs {
     /// Database file containing captured packets
+    #[arg(short, long, default_value = "packets.db")]
+    pub database: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+pub struct ExportArgs {
+    /// Database file containing captured packets
+    #[arg(short, long, default_value = "packets.db")]
+    pub database: PathBuf,
+    
+    /// Session ID to export
+    #[arg(short, long)]
+    pub session: String,
+    
+    /// Output PCAP file
+    #[arg(short, long)]
+    pub output: PathBuf,
+    
+    /// Maximum number of packets to export (0 = all)
+    #[arg(short = 'n', long, default_value = "0")]
+    pub limit: i64,
+}
+
+#[derive(Parser, Debug)]
+pub struct ServeArgs {
+    #[arg(long, default_value = "0.0.0.0:50051")]
+    pub grpc_addr: String,
+
+    #[arg(long, default_value = "0.0.0.0:8080")]
+    pub http_addr: String,
+
     #[arg(short, long, default_value = "packets.db")]
     pub database: PathBuf,
 }
