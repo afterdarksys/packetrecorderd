@@ -280,8 +280,46 @@ fn run_capture_loop(
             }
         }
     };
-    let forensics = ForensicsEngine::new(signatures);
-    let mut processor = PacketProcessor::new(forensics);
+    let api_config = crate::config::api_keys::ApiConfig::from_env();
+    
+    let darkapi_client = if let (Some(key), url) = (api_config.darkapi_key.clone(), api_config.darkapi_base_url.clone()) {
+        Some(Arc::new(crate::forensics::darkapi::DarkApiClient::new(key, url)))
+    } else {
+        None
+    };
+
+    let dnsscience_client = if let (Some(key), url) = (api_config.dnsscience_api_key.clone(), api_config.dnsscience_base_url.clone()) {
+        Some(Arc::new(crate::forensics::dnsscience::DnsScienceClient::new(key, url)))
+    } else {
+        None
+    };
+
+    let cloudflare_client = if let (Some(key), Some(account)) = (api_config.cloudflare_api_key, api_config.cloudflare_account_id) {
+        Some(Arc::new(crate::forensics::cloudflare::CloudflareApiClient::new(key, account)))
+    } else {
+        None
+    };
+
+    let api_lookup = Arc::new(crate::forensics::api_lookup::ApiLookupHandler::new(
+        darkapi_client,
+        dnsscience_client,
+        cloudflare_client
+    ));
+    
+    // Initialize Model API Client
+    let model_client = if let Ok(key) = std::env::var("MODEL_API_KEY") {
+        Some(Arc::new(crate::model_client::ModelApiClient::new(
+            std::env::var("MODEL_API_URL").unwrap_or_else(|_| "https://models.packetrecorder.io".to_string()),
+            key
+        )))
+    } else {
+        None
+    };
+    
+    let gossip = Some(Arc::new(crate::swarm::GossipService::new()));
+
+    let forensics = ForensicsEngine::new(signatures, api_lookup);
+    let mut processor = PacketProcessor::new(forensics, None, gossip, model_client);
 
     let store = PacketStore::new(&db_path, encryption_key.as_deref()).context("Failed to open database")?;
 

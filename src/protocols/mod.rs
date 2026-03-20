@@ -12,6 +12,8 @@ pub mod rip;
 pub mod routing;
 pub mod smtp;
 pub mod ssh;
+pub mod bittorrent;
+pub mod plugin;
 
 #[allow(dead_code)]
 use anyhow::Result;
@@ -35,8 +37,10 @@ pub enum ProtocolInfo {
     Eigrp(routing::EigrpInfo),
     Smtp(smtp::SmtpInfo),
     Ssh(ssh::SshInfo),
+    BitTorrent(bittorrent::BitTorrentInfo),
     Netflow(String),
     Sflow(String),
+    Plugin(plugin::PluginInfo),
     Unknown,
 }
 

@@ -2,7 +2,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_build::configure()
         .build_server(true)
         .compile(
-            &["proto/packetrecorder/v1/packetrecorder.proto"],
+            &["proto/packetrecorder/v1/packetrecorder.proto", "proto/packetrecorder/v1/plugin_api.proto"],
             &["proto"],
         )?;
     Ok(())

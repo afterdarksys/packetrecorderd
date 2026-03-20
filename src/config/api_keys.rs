@@ -6,6 +6,8 @@ pub struct ApiConfig {
     pub dnsscience_base_url: String,
     pub darkapi_key: Option<String>,
     pub darkapi_base_url: String,
+    pub cloudflare_api_key: Option<String>,
+    pub cloudflare_account_id: Option<String>,
 }
 
 impl ApiConfig {
@@ -17,6 +19,8 @@ impl ApiConfig {
             darkapi_key: env::var("DARKAPI_KEY").ok(),
             darkapi_base_url: env::var("DARKAPI_URL")
                 .unwrap_or_else(|_| "https://console.darkapi.io".to_string()),
+            cloudflare_api_key: env::var("CLOUDFLARE_API_KEY").ok(),
+            cloudflare_account_id: env::var("CLOUDFLARE_ACCOUNT_ID").ok(),
         }
     }
 

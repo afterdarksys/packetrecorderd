@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_database_writer() {
-        let store = Arc::new(Mutex::new(PacketStore::new_in_memory().unwrap()));
+        let store = Arc::new(Mutex::new(PacketStore::new_in_memory(None).unwrap()));
         let mut writer = DatabaseWriter::new(store.clone(), "eth0", None).unwrap();
         
         let timestamp = Utc::now();
@@ -235,7 +235,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_async_writer() {
-        let store = Arc::new(Mutex::new(PacketStore::new_in_memory().unwrap()));
+        let store = Arc::new(Mutex::new(PacketStore::new_in_memory(None).unwrap()));
         let writer = DatabaseWriter::new(store.clone(), "eth0", None).unwrap();
         let session_id = writer.session_id().to_string();
         
