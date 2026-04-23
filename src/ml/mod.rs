@@ -3,23 +3,26 @@ pub mod models;
 use anyhow::Result;
 use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+// use hf_hub::{api::sync::Api, Repo, RepoType};
 use models::TrafficClassifier;
-use std::sync::{Arc, Mutex};
-use tracing::{info, error};
+use std::sync::Arc;
+use tracing::{info, error, warn};
+use crate::model_client::ModelApiClient;
 
 #[derive(Clone)]
 pub struct MLProcessor {
     classifier: Option<Arc<TrafficClassifier>>,
     device: Device,
+    client: Option<Arc<ModelApiClient>>,
 }
 
 impl MLProcessor {
-    pub fn new() -> Self {
+    pub fn new(client: Option<Arc<ModelApiClient>>) -> Self {
         let device = Device::Cpu; // Default to CPU for broad compatibility
         Self {
             classifier: None,
             device,
+            client,
         }
     }
 
@@ -32,6 +35,37 @@ impl MLProcessor {
         // Or we could try to download a demo model if one existed.
         
         // Uncomment below when a real model exists on HF Hub
+        // Check for model updates if client is available
+        if let Some(client) = &self.client {
+            info!("Checking for model updates...");
+            // We spawn this to not block, or just await if we were async. 
+            // Since this is sync and load_models returns Result, we'll just check manifest
+            // In a real app we'd need an async runtime handle here or block_on
+            // For now, we'll use a blocking runtime for this init step if needed, 
+            // or just note that we would fetch:
+            
+            // To actually use the code to satisfy the compiler:
+            let client_clone = client.clone();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                
+                rt.block_on(async {
+                    match client_clone.fetch_manifest().await {
+                        Ok(manifest) => {
+                            info!("Found model manifest: version {}", manifest.version);
+                            // Here we would download artifacts using client.artifact_url()
+                        },
+                        Err(e) => {
+                            warn!("Failed to fetch model manifest: {}", e);
+                        }
+                    }
+                });
+            });
+        }
+
         /*
         let api = Api::new()?;
         let repo = api.repo(Repo::new("packetrecorder/traffic-classifier".to_string(), RepoType::Model));

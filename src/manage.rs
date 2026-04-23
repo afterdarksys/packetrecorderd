@@ -362,7 +362,6 @@ fn inspect_pcap(
                     etherparse::TransportSlice::Icmpv6(icmp) => {
                         println!("icmpv6 type={} code={}", icmp.type_u8(), icmp.code_u8());
                     }
-                    _ => {}
                 }
             }
         }

@@ -74,7 +74,8 @@ fn load_api_keys_from_env() -> std::collections::HashSet<String> {
 
 fn authorized(headers: &HeaderMap, keys: &std::collections::HashSet<String>) -> bool {
     if keys.is_empty() {
-        return true;
+        tracing::warn!("No API keys configured - denying all requests");
+        return false;
     }
 
     if let Some(v) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {

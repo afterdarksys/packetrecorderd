@@ -183,6 +183,7 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
     use config::signatures::Signatures;
     use forensics::ForensicsEngine;
     use processing::PacketProcessor;
+    use config::plugins::PluginsConfig;
     use std::thread;
     
     info!("Starting packet capture on interface: {}", args.interface);
@@ -199,7 +200,77 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
         }
     };
 
-    let forensics = ForensicsEngine::new(signatures);
+    // Initialize API Clients
+    let api_config = config::api_keys::ApiConfig::from_env();
+    
+    let darkapi_client = if let (Some(key), url) = (api_config.darkapi_key.clone(), api_config.darkapi_base_url.clone()) {
+        info!("Initializing DarkAPI client");
+        Some(Arc::new(forensics::darkapi::DarkApiClient::new(key, url)))
+    } else {
+        None
+    };
+
+    let dnsscience_client = if api_config.has_dnsscience() {
+        info!("Initializing DNSScience client");
+        Some(Arc::new(forensics::dnsscience::DnsScienceClient::new(
+            api_config.dnsscience_base_url,
+            api_config.dnsscience_api_key.unwrap()
+        )))
+    } else {
+        None
+    };
+
+    let cloudflare_client = if let (Some(key), Some(account)) = (api_config.cloudflare_api_key, api_config.cloudflare_account_id) {
+        info!("Initializing Cloudflare Enrichment Client");
+        Some(Arc::new(forensics::cloudflare::CloudflareApiClient::new(key, account)))
+    } else {
+        None
+    };
+    
+    // Initialize API Lookup Handler
+    let api_lookup = Arc::new(forensics::api_lookup::ApiLookupHandler::new(
+        darkapi_client,
+        dnsscience_client,
+        cloudflare_client
+    ));
+    
+    // Initialize Model API Client
+    let model_client = if let Ok(key) = std::env::var("MODEL_API_KEY") {
+        info!("Initializing Model API Client");
+        Some(Arc::new(model_client::ModelApiClient::new(
+            std::env::var("MODEL_API_URL").unwrap_or_else(|_| "https://models.packetrecorder.io".to_string()),
+            key
+        )))
+    } else {
+        None
+    };
+    
+    // Initialize Gossip Service
+    let gossip = Arc::new(swarm::GossipService::new());
+    
+    // Start gossip subscriber logger
+    let gossip_rx = gossip.subscribe();
+    tokio::spawn(async move {
+        let mut rx = gossip_rx;
+        while let Ok(threat) = rx.recv().await {
+            info!("GOSSIP ALERT: Received threat intel from {}: {:?} ({})", 
+                threat.source_node, threat.value, threat.indicator_type);
+        }
+    });
+
+    let forensics = ForensicsEngine::new(signatures, api_lookup);
+    
+    // Load plugins
+    let plugins_config = match PluginsConfig::load("plugins.json") {
+        Ok(c) => {
+            info!("Loaded plugins config: {} plugins", c.plugins.len());
+            Some(c)
+        },
+        Err(_) => {
+            info!("No plugins.json found or failed to load, proceeding without plugins.");
+            None
+        }
+    };
     
     // Open database
     let store = Arc::new(Mutex::new(PacketStore::new(&args.database, encryption_key.as_deref())
@@ -243,9 +314,17 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
         // Clone forensics for sharing
         let forensics_clone = forensics.clone();
         
+        // Clone plugins config for sharing (it's cloneable)
+        let plugins_config_clone = plugins_config.clone();
+        
+        // Clone gossip service
+        let gossip_clone = Some(gossip.clone());
+        
+        let model_client_clone = model_client.clone();
+        
         // Spawn worker
         let handle = thread::spawn(move || {
-            let mut processor = PacketProcessor::new(forensics_clone);
+            let mut processor = PacketProcessor::new(forensics_clone, plugins_config_clone, gossip_clone, model_client_clone);
             info!("Worker {} started", i);
             
             while let Ok((timestamp, data)) = rx.recv() {

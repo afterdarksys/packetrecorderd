@@ -7,18 +7,18 @@ pub mod dnsscience;
 pub mod dns_threats;
 pub mod ip_reputation;
 pub mod api_lookup;
+pub mod cloudflare;
 
 use crate::config::signatures::Signatures;
 use crate::config::api_keys::ApiConfig;
 use crate::protocols::ProtocolInfo;
 use std::sync::{Arc, Mutex};
-use std::sync::Arc as StdArc;
 
 #[derive(Clone)]
 pub struct ForensicsEngine {
     signatures: Arc<Signatures>,
     transfer_detector: Arc<Mutex<transfer::TransferDetector>>,
-    darkapi_client: Option<StdArc<darkapi::DarkApiClient>>,
+    api_lookup: Arc<api_lookup::ApiLookupHandler>,
     fast_flux_detector: Arc<Mutex<dns_threats::FastFluxDetector>>,
     api_config: ApiConfig,
 }
@@ -88,27 +88,23 @@ pub enum ForensicsAlert {
         network_type: String,
         provider: Option<String>,
     },
+    CloudflareDetected {
+        src_ip: String,
+        dst_ip: String,
+        service: String,
+        details: Option<String>,
+    },
 }
 
 impl ForensicsEngine {
-    pub fn new(signatures: Signatures) -> Self {
+    pub fn new(signatures: Signatures, api_lookup: Arc<api_lookup::ApiLookupHandler>) -> Self {
         let sigs = Arc::new(signatures);
         let api_config = ApiConfig::from_env();
-        
-        // Initialize DarkAPI client if credentials available
-        let darkapi_client = if let (Some(api_key), base_url) = (
-            api_config.darkapi_key.clone(),
-            api_config.darkapi_base_url.clone()
-        ) {
-            Some(StdArc::new(darkapi::DarkApiClient::new(api_key, base_url)))
-        } else {
-            None
-        };
         
         Self {
             signatures: sigs.clone(),
             transfer_detector: Arc::new(Mutex::new(transfer::TransferDetector::new(sigs))),
-            darkapi_client,
+            api_lookup,
             fast_flux_detector: Arc::new(Mutex::new(dns_threats::FastFluxDetector::new())),
             api_config,
         }
@@ -145,6 +141,19 @@ impl ForensicsEngine {
             });
         }
 
+        // Check Cloudflare
+        if let Some(service) = cloudflare::check_cloudflare(protocol_info) {
+            alerts.push(ForensicsAlert::CloudflareDetected {
+                src_ip: src_ip.to_string(),
+                dst_ip: dst_ip.to_string(),
+                service: service.as_str().to_string(),
+                details: match protocol_info {
+                    ProtocolInfo::Tls(info) => info.sni.clone(),
+                    _ => None,
+                },
+            });
+        }
+
         // Check Transfer
         let mut transfer_detector = self.transfer_detector.lock().unwrap();
         if let Some(bytes) = transfer_detector.update(src_ip, dst_ip, packet_len) {
@@ -158,6 +167,36 @@ impl ForensicsEngine {
 
         // DNS-specific threat detection
         if let ProtocolInfo::Dns(ref dns_info) = protocol_info {
+            // Check API for Domain Reputation
+            let domain_req = api_lookup::ApiLookupRequest::DomainReputation { domain: dns_info.query.clone() };
+            if let Some(resp) = self.api_lookup.get_cached(&domain_req) {
+                 match resp {
+                     api_lookup::ApiLookupResponse::DomainReputation(intel) => {
+                         if intel.found {
+                             alerts.push(ForensicsAlert::MaliciousDomain {
+                                 domain: dns_info.query.clone(),
+                                 severity: intel.severity.unwrap_or_else(|| "Medium".to_string()),
+                                 categories: intel.categories.unwrap_or_default(),
+                                 confidence: intel.confidence.unwrap_or(50),
+                             });
+                         }
+                     },
+                     api_lookup::ApiLookupResponse::DnsIntelligence(intel) => {
+                         if intel.is_suspicious {
+                             alerts.push(ForensicsAlert::MaliciousDomain {
+                                 domain: dns_info.query.clone(),
+                                 severity: "High".to_string(),
+                                 categories: intel.threat_categories.unwrap_or_default(),
+                                 confidence: 80,
+                             });
+                         }
+                     },
+                     _ => {}
+                 }
+            } else {
+                self.api_lookup.queue_lookup(domain_req);
+            }
+
             // Check for DNS tunneling
             if let Some(reason) = dns_threats::detect_dns_tunneling(dns_info) {
                 alerts.push(ForensicsAlert::DnsTunneling {
@@ -210,7 +249,42 @@ impl ForensicsEngine {
             }
         }
 
-        // IP reputation (datacenter detection)
+        // Check IP Reputation via API
+        let ip_req = api_lookup::ApiLookupRequest::IpReputation { ip: src_ip.to_string() };
+        if let Some(resp) = self.api_lookup.get_cached(&ip_req) {
+            match resp {
+                api_lookup::ApiLookupResponse::IpReputation(rep) => {
+                    if rep.is_malicious {
+                        alerts.push(ForensicsAlert::MaliciousIp {
+                            ip: src_ip.to_string(),
+                            severity: "High".to_string(),
+                            categories: rep.categories.unwrap_or_default(),
+                            source: "DarkAPI".to_string(),
+                        });
+                    }
+                },
+                api_lookup::ApiLookupResponse::TrafficClassification(cls) => {
+                    if cls.is_datacenter || cls.is_vpn || cls.is_max_risk() {
+                         let mut cats = Vec::new();
+                         if cls.is_datacenter { cats.push("Datacenter".to_string()); }
+                         if cls.is_vpn { cats.push("VPN".to_string()); }
+                         
+                         alerts.push(ForensicsAlert::MaliciousIp {
+                            ip: src_ip.to_string(),
+                            severity: if cls.confidence > 80 { "Medium".to_string() } else { "Low".to_string() },
+                            categories: cats,
+                            source: "DNSScience".to_string(),
+                        });
+                    }
+                },
+                _ => {}
+            }
+        } else {
+            // Queue for future packets
+            self.api_lookup.queue_lookup(ip_req);
+        }
+
+        // IP reputation (datacenter detection from local rules or API)
         let network_type = ip_reputation::classify_ip_type(src_ip);
         if network_type != ip_reputation::NetworkType::Unknown {
             alerts.push(ForensicsAlert::DatacenterIp {
@@ -221,5 +295,31 @@ impl ForensicsEngine {
         }
 
         alerts
+    }
+
+    pub fn cleanup_state(&self) {
+        if let Ok(mut detector) = self.fast_flux_detector.lock() {
+            detector.cleanup_old_entries();
+        }
+    }
+}
+
+impl ForensicsAlert {
+    pub fn describe(&self) -> String {
+        match self {
+            ForensicsAlert::TorDetected { reason, .. } => format!("TOR: {}", reason),
+            ForensicsAlert::ChatDetected { app, .. } => format!("Chat: {}", app),
+            ForensicsAlert::CloudStorageDetected { service, .. } => format!("Cloud Storage: {}", service),
+            ForensicsAlert::HighVolumeTransfer { bytes, .. } => format!("High Volume Transfer: {} bytes", bytes),
+            ForensicsAlert::MaliciousIp { ip, severity, .. } => format!("Malicious IP: {} ({})", ip, severity),
+            ForensicsAlert::MaliciousDomain { domain, severity, .. } => format!("Malicious Domain: {} ({})", domain, severity),
+            ForensicsAlert::DnsTunneling { domain, reason, .. } => format!("DNS Tunneling: {} ({})", domain, reason),
+            ForensicsAlert::DgaDetected { domain, score, .. } => format!("DGA: {} ({})", domain, score),
+            ForensicsAlert::FastFlux { domain, .. } => format!("Fast Flux: {}", domain),
+            ForensicsAlert::SuspiciousTld { domain, tld, .. } => format!("Suspicious TLD: {} ({})", domain, tld),
+            ForensicsAlert::BotDetected { bot_type, .. } => format!("Bot: {}", bot_type),
+            ForensicsAlert::DatacenterIp { ip, network_type, .. } => format!("Datacenter IP: {} ({})", ip, network_type),
+            ForensicsAlert::CloudflareDetected { service, details, .. } => format!("Cloudflare: {} ({:?})", service, details),
+        }
     }
 }

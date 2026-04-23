@@ -198,7 +198,7 @@ mod tests {
         let http_info = HttpInfo {
             method: "GET".to_string(),
             host: Some("example.com".to_string()),
-            uri: Some("/".to_string()),
+            path: "/".to_string(),
             user_agent: Some("python-requests/2.28.0".to_string()),
         };
         

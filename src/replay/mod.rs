@@ -223,7 +223,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_replay_session() {
-        let store = Arc::new(Mutex::new(PacketStore::new_in_memory().unwrap()));
+        let store = Arc::new(Mutex::new(PacketStore::new_in_memory(None).unwrap()));
         let session_id = store.lock().unwrap().create_session("eth0", None).unwrap();
         
         // Add some test packets
@@ -247,7 +247,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_replay_with_limit() {
-        let store = Arc::new(Mutex::new(PacketStore::new_in_memory().unwrap()));
+        let store = Arc::new(Mutex::new(PacketStore::new_in_memory(None).unwrap()));
         let session_id = store.lock().unwrap().create_session("eth0", None).unwrap();
         
         let packet_data = vec![0x01, 0x02, 0x03, 0x04];

@@ -1,0 +1,9 @@
+{
+    "plugins": [
+        {
+            "name": "example_plugin",
+            "command": "python3 examples/plugins/example_plugin.py",
+            "ports": [9999]
+        }
+    ]
+}

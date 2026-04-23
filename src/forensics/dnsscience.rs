@@ -16,6 +16,12 @@ pub struct TrafficClassification {
     pub confidence: u8,
 }
 
+impl TrafficClassification {
+    pub fn is_max_risk(&self) -> bool {
+        self.classification == "malicious" || self.classification == "botnet"
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsIntelligence {
     pub domain: String,

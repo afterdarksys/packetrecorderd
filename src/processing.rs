@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use anyhow::Result;
 use chrono::{DateTime, Utc, Duration};
 use tracing::{info, warn};
 use crate::forensics::{ForensicsEngine, ForensicsAlert};
 use crate::protocols::{self, ProtocolParser, ProtocolInfo};
 use crate::ml::MLProcessor;
+use crate::swarm::{GossipService, ThreatIndicator};
 use crate::protocols::tls::TlsParser;
 use crate::protocols::ldap::LdapParser;
 use crate::protocols::netbios::NetbiosParser;
@@ -16,6 +18,9 @@ use crate::protocols::smtp::SmtpParser;
 use crate::protocols::dns::DnsParser;
 use crate::protocols::http::HttpParser;
 use crate::protocols::ssh::SshParser;
+use crate::protocols::bittorrent::BitTorrentParser;
+use crate::protocols::plugin::PluginManager;
+use crate::config::plugins::PluginsConfig;
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
 struct FlowKey {
@@ -98,16 +103,36 @@ pub struct PacketProcessor {
     dns_parser: DnsParser,
     http_parser: HttpParser,
     ssh_parser: SshParser,
+    bittorrent_parser: BitTorrentParser,
     flow_table: HashMap<FlowKey, FlowState>,
     ml_processor: MLProcessor,
+    plugin_manager: PluginManager,
+    gossip: Option<Arc<GossipService>>,
+    model_client: Option<Arc<crate::model_client::ModelApiClient>>,
 }
 
 impl PacketProcessor {
-    pub fn new(forensics: ForensicsEngine) -> Self {
-        let mut ml_processor = MLProcessor::new();
+    pub fn new(
+        forensics: ForensicsEngine,
+        plugins_config: Option<PluginsConfig>,
+        gossip: Option<Arc<GossipService>>,
+        model_client: Option<Arc<crate::model_client::ModelApiClient>>,
+    ) -> Self {
+        let mut ml_processor = MLProcessor::new(model_client.clone());
         // Load models potentially in a background thread or here if fast
         if let Err(e) = ml_processor.load_models() {
             warn!("Failed to load ML models: {:?}", e);
+        }
+
+        let mut plugin_manager = PluginManager::new();
+        if let Some(config) = plugins_config {
+            for plugin in config.plugins {
+                for port in plugin.ports {
+                    if let Err(e) = plugin_manager.register_plugin(plugin.name.clone(), plugin.command.clone(), port) {
+                        warn!("Failed to register plugin '{}': {:?}", plugin.name, e);
+                    }
+                }
+            }
         }
 
         Self {
@@ -123,8 +148,12 @@ impl PacketProcessor {
             dns_parser: DnsParser::new(),
             http_parser: HttpParser::new(),
             ssh_parser: SshParser::new(),
+            bittorrent_parser: BitTorrentParser::new(),
             flow_table: HashMap::new(),
             ml_processor,
+            plugin_manager,
+            gossip,
+            model_client,
         }
     }
 
@@ -134,6 +163,9 @@ impl PacketProcessor {
         self.flow_table.retain(|_, state| {
             now.signed_duration_since(state.last_seen) < ttl
         });
+        
+        // Cleanup forensics state
+        self.forensics.cleanup_state();
     }
 
     fn describe_icmp(version: u8, type_: u8, code: u8) -> String {
@@ -314,7 +346,6 @@ impl PacketProcessor {
                             description: Self::describe_icmp(6, type_, code),
                         });
                     },
-                    _ => {}
                 }
             } else {
                 // No transport slice (or unparsed). Check IP protocol for OSPF/EIGRP.
@@ -339,6 +370,54 @@ impl PacketProcessor {
                 }
             }
             
+            // Check for Plugin Override
+            if matches!(protocol_info, protocols::ProtocolInfo::Unknown) && (src_port > 0 || dst_port > 0) {
+                 // Check if we have a plugin for either port
+                 let plugin_port = if self.plugin_manager.get_plugin(src_port).is_some() {
+                     Some(src_port)
+                 } else if self.plugin_manager.get_plugin(dst_port).is_some() {
+                     Some(dst_port)
+                 } else {
+                     None
+                 };
+
+                 if let Some(port) = plugin_port {
+                     if let Some(plugin) = self.plugin_manager.get_plugin(port) {
+                         // We need to lock the plugin instance to use it
+                         if let Ok(mut plugin_instance) = plugin.lock() {
+                             use crate::protocols::plugin::plugin_proto::PluginParseRequest;
+                             
+                             let req = PluginParseRequest {
+                                 payload: payload.to_vec(),
+                                 src_ip: src_ip.clone(),
+                                 src_port: src_port as u32,
+                                 dst_ip: dst_ip.clone(),
+                                 dst_port: dst_port as u32,
+                                 protocol: l4_protocol.to_string(),
+                             };
+                             
+                             match plugin_instance.parse(req) {
+                                 Ok(resp) => {
+                                     if resp.success {
+                                         use crate::protocols::plugin::PluginInfo;
+                                         protocol_info = protocols::ProtocolInfo::Plugin(PluginInfo {
+                                             name: resp.name,
+                                             attributes: resp.attributes,
+                                         });
+                                         info!("Plugin decoded protocol: {:?}", protocol_info);
+                                     } else {
+                                         warn!("Plugin failed to parse: {}", resp.error_message);
+                                     }
+                                 },
+                                 Err(e) => {
+                                     warn!("Error invoking plugin: {:?}", e);
+                                 }
+                             }
+                         }
+                     }
+                 }
+            }
+
             if !payload.is_empty() {
                 // Protocol detection chain (if not already found)
                 if matches!(protocol_info, protocols::ProtocolInfo::Unknown) {
@@ -403,6 +482,12 @@ impl PacketProcessor {
                     }
                 }
 
+                if matches!(protocol_info, protocols::ProtocolInfo::Unknown) {
+                    if let Some(info) = self.bittorrent_parser.parse(payload) {
+                        protocol_info = protocols::ProtocolInfo::BitTorrent(info);
+                    }
+                }
+
                 // Try LDAP if unknown
                 if matches!(protocol_info, protocols::ProtocolInfo::Unknown) {
                     if let Ok(info) = self.ldap_parser.parse(payload) {
@@ -441,6 +526,37 @@ impl PacketProcessor {
 
                 let alerts = self.forensics.analyze(&src_ip, &dst_ip, src_port, dst_port, &protocol_info, data.len());
                 for alert in alerts {
+                    // Broadcast high severity threats via Gossip
+                    if let Some(gossip) = &self.gossip {
+                        match &alert {
+                            ForensicsAlert::MaliciousIp { ip, severity, .. } if severity == "High" => {
+                                gossip.broadcast_threat(ThreatIndicator {
+                                    value: ip.clone(),
+                                    indicator_type: "ip".to_string(),
+                                    confidence: 0.9,
+                                    source_node: "local".to_string(),
+                                });
+                            },
+                            ForensicsAlert::MaliciousDomain { domain, severity, .. } if severity == "High" => {
+                                gossip.broadcast_threat(ThreatIndicator {
+                                    value: domain.clone(),
+                                    indicator_type: "domain".to_string(),
+                                    confidence: 0.8,
+                                    source_node: "local".to_string(),
+                                });
+                            },
+                            ForensicsAlert::DgaDetected { domain, .. } => {
+                                gossip.broadcast_threat(ThreatIndicator {
+                                    value: domain.clone(),
+                                    indicator_type: "domain".to_string(),
+                                    confidence: 0.7,
+                                    source_node: "local".to_string(),
+                                });
+                            },
+                            _ => {}
+                        }
+                    }
+
                     match alert {
                         ForensicsAlert::TorDetected { src_ip, dst_ip, reason } => {
                             warn!("TOR DETECTED: {} -> {}: {}", src_ip, dst_ip, reason);
@@ -477,6 +593,9 @@ impl PacketProcessor {
                         },
                         ForensicsAlert::DatacenterIp { ip, network_type, provider } => {
                             info!("DATACENTER IP: {} - Type: {} - Provider: {:?}", ip, network_type, provider);
+                        },
+                        ForensicsAlert::CloudflareDetected { service, details, .. } => {
+                            info!("CLOUDFLARE DETECTED: Service={} Details={:?}", service, details);
                         },
                     }
                 }

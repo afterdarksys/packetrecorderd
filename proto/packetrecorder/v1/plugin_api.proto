@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package packetrecorder.v1;
+
+message PluginParseRequest {
+  bytes payload = 1;
+  string src_ip = 2;
+  uint32 src_port = 3;
+  string dst_ip = 4;
+  uint32 dst_port = 5;
+  string protocol = 6; // "TCP" or "UDP"
+}
+
+message PluginParseResponse {
+  bool success = 1;
+  string name = 2; // e.g. "MyCustomProtocol"
+  map<string, string> attributes = 3;
+  string error_message = 4;
+}

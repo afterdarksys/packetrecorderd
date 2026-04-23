@@ -211,22 +211,13 @@ impl PacketStore {
 
     /// Get packets for a session
     pub fn get_packets(&self, session_id: &str, limit: Option<i64>) -> Result<Vec<StoredPacket>> {
-        let query = if let Some(lim) = limit {
-            format!(
-                "SELECT id, session_id, timestamp, length, data 
-                 FROM packets WHERE session_id = ?1 
-                 ORDER BY timestamp ASC LIMIT {}",
-                lim
-            )
-        } else {
-            "SELECT id, session_id, timestamp, length, data 
-             FROM packets WHERE session_id = ?1 
-             ORDER BY timestamp ASC".to_string()
-        };
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, timestamp, length, data
+             FROM packets WHERE session_id = ?1
+             ORDER BY timestamp ASC LIMIT ?2"
+        )?;
 
-        let mut stmt = self.conn.prepare(&query)?;
-
-        let packets = stmt.query_map(params![session_id], |row| {
+        let packets = stmt.query_map(params![session_id, limit.unwrap_or(-1)], |row| {
             Ok(StoredPacket {
                 id: row.get(0)?,
                 session_id: row.get(1)?,
@@ -243,22 +234,12 @@ impl PacketStore {
     where
         F: FnMut(DateTime<Utc>, Vec<u8>) -> Result<()>,
     {
-        let query = if let Some(lim) = limit {
-            format!(
-                "SELECT timestamp, data 
-                 FROM packets WHERE session_id = ?1 
-                 ORDER BY timestamp ASC LIMIT {}",
-                lim
-            )
-        } else {
-            "SELECT timestamp, data 
-             FROM packets WHERE session_id = ?1 
-             ORDER BY timestamp ASC"
-                .to_string()
-        };
-
-        let mut stmt = self.conn.prepare(&query)?;
-        let mut rows = stmt.query(params![session_id])?;
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, data
+             FROM packets WHERE session_id = ?1
+             ORDER BY timestamp ASC LIMIT ?2"
+        )?;
+        let mut rows = stmt.query(params![session_id, limit.unwrap_or(-1)])?;
 
         while let Some(row) = rows.next()? {
             let ts: String = row.get(0)?;
