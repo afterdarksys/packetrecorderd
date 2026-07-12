@@ -385,6 +385,29 @@ The project is organized into several modules:
 
 The forensics engine automatically detects and analyzes:
 
+### Proprietary decoder plugins
+
+Decoder plugins are supervised native subprocesses configured in `plugins.json`. A plugin declares
+the exact executable and argument array, API version, selected ports, and bounded request/response
+limits. Plugins receive payload and flow metadata over length-prefixed protobuf and can return typed
+fields, byte-range annotations, confidence, summaries, and forensic findings.
+
+Plugins run only in the bounded analysis path: they cannot delay PCAP recording. Treat plugin
+configuration and executables as trusted administrator-controlled code. The daemon clears the child
+environment except for `PATH`, validates all response sizes and annotations, and restarts a plugin
+once after a protocol or process failure.
+
+See `proto/packetrecorder/v1/plugin_api.proto` and `examples/plugins/example_plugin.py` for the v1
+authoring contract. Use `python3 -m grpc_tools.protoc -I proto --python_out=examples/plugins
+proto/packetrecorder/v1/plugin_api.proto` to regenerate the Python bindings after contract changes.
+
+Selectors may use `ports` or payload `signatures` such as `{"offset":0,"hex":"41434d45"}`.
+TCP payloads are delivered as bounded, contiguous reassembled chunks; `stream_has_gaps` warns a
+decoder when analysis missed bytes. Three consecutive failures open a 30-second circuit breaker.
+Prometheus exports `packetrecorder_plugin_invocations_total` and
+`packetrecorder_plugin_latency_seconds`. Plugin findings are written asynchronously to
+`plugin_findings` with capture session, timestamp, flow, and plugin lineage.
+
 ### Applications
 - Tor (exit nodes, bridges, ORPort connections)
 - Chat apps (Signal, WhatsApp, Telegram, Discord, Slack, Teams, Zoom)

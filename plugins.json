@@ -2,8 +2,11 @@
     "plugins": [
         {
             "name": "example_plugin",
-            "command": "python3 examples/plugins/example_plugin.py",
-            "ports": [9999]
+            "api_version": "packetrecorder.plugin/v1",
+            "executable": "python3",
+            "args": ["examples/plugins/example_plugin.py"],
+            "ports": [9999],
+            "signatures": [{"offset": 0, "hex": "48656c6c6f20506c7567696e"}]
         }
     ]
 }

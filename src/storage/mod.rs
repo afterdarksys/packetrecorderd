@@ -30,6 +30,17 @@ pub struct StoredPacket {
     pub data: Vec<u8>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PluginFindingRecord {
+    pub session_id: String,
+    pub timestamp: DateTime<Utc>,
+    pub flow_id: String,
+    pub plugin_name: String,
+    pub severity: String,
+    pub title: String,
+    pub description: String,
+}
+
 /// SQLite-based packet storage
 pub struct PacketStore {
     conn: Connection,
@@ -89,6 +100,20 @@ impl PacketStore {
             )",
             [],
         ).context("Failed to create packets table")?;
+
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS plugin_findings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                flow_id TEXT NOT NULL,
+                plugin_name TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )", [],
+        ).context("Failed to create plugin findings table")?;
 
         // Create indices for performance
         self.conn.execute(
@@ -159,6 +184,37 @@ impl PacketStore {
         )?;
 
         Ok(packet_id)
+    }
+
+    /// Save a batch in one transaction to avoid a durable commit per packet.
+    pub fn save_packets(&mut self, session_id: &str, packets: &[(DateTime<Utc>, Vec<u8>)]) -> Result<()> {
+        if packets.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.transaction().context("Failed to start packet batch")?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO packets (session_id, timestamp, length, data) VALUES (?1, ?2, ?3, ?4)"
+            )?;
+            for (timestamp, data) in packets {
+                stmt.execute(params![session_id, timestamp.to_rfc3339(), data.len() as i64, data])?;
+            }
+        }
+        tx.execute(
+            "UPDATE sessions SET packet_count = packet_count + ?1 WHERE id = ?2",
+            params![packets.len() as i64, session_id],
+        )?;
+        tx.commit().context("Failed to commit packet batch")
+    }
+
+    pub fn save_plugin_finding(&self, finding: &PluginFindingRecord) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO plugin_findings (session_id, timestamp, flow_id, plugin_name, severity, title, description)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![finding.session_id, finding.timestamp.to_rfc3339(), finding.flow_id,
+                finding.plugin_name, finding.severity, finding.title, finding.description],
+        ).context("Failed to persist plugin finding")?;
+        Ok(self.conn.last_insert_rowid())
     }
 
     /// Get session information
@@ -338,5 +394,22 @@ mod tests {
         
         let session = store.get_session(&session_id).unwrap().unwrap();
         assert!(session.end_time.is_some());
+    }
+
+    #[test]
+    fn persists_plugin_finding_lineage() {
+        let store = PacketStore::new_in_memory(None).unwrap();
+        let session_id = store.create_session("eth0", None).unwrap();
+        let id = store.save_plugin_finding(&PluginFindingRecord {
+            session_id: session_id.clone(), timestamp: Utc::now(), flow_id: "flow-1".to_string(),
+            plugin_name: "decoder".to_string(), severity: "high".to_string(),
+            title: "Proprietary fault".to_string(), description: "code 7".to_string(),
+        }).unwrap();
+        assert!(id > 0);
+        let count: i64 = store.conn.query_row(
+            "SELECT COUNT(*) FROM plugin_findings WHERE session_id = ?1 AND flow_id = 'flow-1'",
+            params![session_id], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(count, 1);
     }
 }

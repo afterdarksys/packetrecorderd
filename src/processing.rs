@@ -21,6 +21,9 @@ use crate::protocols::ssh::SshParser;
 use crate::protocols::bittorrent::BitTorrentParser;
 use crate::protocols::plugin::PluginManager;
 use crate::config::plugins::PluginsConfig;
+use crate::protocols::reassembly::TcpStreamReassembler;
+use crate::storage::PluginFindingRecord;
+use crossbeam_channel::Sender;
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
 struct FlowKey {
@@ -105,10 +108,13 @@ pub struct PacketProcessor {
     ssh_parser: SshParser,
     bittorrent_parser: BitTorrentParser,
     flow_table: HashMap<FlowKey, FlowState>,
+    plugin_streams: HashMap<FlowKey, TcpStreamReassembler>,
     ml_processor: MLProcessor,
     plugin_manager: PluginManager,
     gossip: Option<Arc<GossipService>>,
     model_client: Option<Arc<crate::model_client::ModelApiClient>>,
+    finding_sink: Option<Sender<PluginFindingRecord>>,
+    session_id: Option<String>,
 }
 
 impl PacketProcessor {
@@ -127,10 +133,9 @@ impl PacketProcessor {
         let mut plugin_manager = PluginManager::new();
         if let Some(config) = plugins_config {
             for plugin in config.plugins {
-                for port in plugin.ports {
-                    if let Err(e) = plugin_manager.register_plugin(plugin.name.clone(), plugin.command.clone(), port) {
-                        warn!("Failed to register plugin '{}': {:?}", plugin.name, e);
-                    }
+                let name = plugin.name.clone();
+                if let Err(e) = plugin_manager.register_config(plugin) {
+                    warn!("Failed to register plugin '{}': {:?}", name, e);
                 }
             }
         }
@@ -150,11 +155,20 @@ impl PacketProcessor {
             ssh_parser: SshParser::new(),
             bittorrent_parser: BitTorrentParser::new(),
             flow_table: HashMap::new(),
+            plugin_streams: HashMap::new(),
             ml_processor,
             plugin_manager,
             gossip,
             model_client,
+            finding_sink: None,
+            session_id: None,
         }
+    }
+
+    pub fn with_finding_sink(mut self, session_id: String, sink: Sender<PluginFindingRecord>) -> Self {
+        self.session_id = Some(session_id);
+        self.finding_sink = Some(sink);
+        self
     }
 
     fn cleanup_stale_flows(&mut self, now: DateTime<Utc>) {
@@ -163,6 +177,9 @@ impl PacketProcessor {
         self.flow_table.retain(|_, state| {
             now.signed_duration_since(state.last_seen) < ttl
         });
+        if self.plugin_streams.len() > 100_000 {
+            self.plugin_streams.clear();
+        }
         
         // Cleanup forensics state
         self.forensics.cleanup_state();
@@ -204,6 +221,8 @@ impl PacketProcessor {
             let mut dst_port = 0;
             let mut payload: &[u8] = &[];
             let mut l4_protocol = "Unknown";
+            let mut reassembled_payload: Option<Vec<u8>> = None;
+            let mut stream_has_gaps = false;
 
             if let Some(ref net) = sliced.net {
                 match net {
@@ -240,6 +259,15 @@ impl PacketProcessor {
                         dst_port = tcp.destination_port();
                         payload = tcp.payload();
                         l4_protocol = "TCP";
+                        if !payload.is_empty() {
+                            let key = FlowKey { src_ip: src_ip.clone(), dst_ip: dst_ip.clone(), src_port, dst_port, protocol: 6 };
+                            let payload_seq = tcp.sequence_number().wrapping_add(u32::from(tcp.syn()));
+                            let stream = self.plugin_streams.entry(key)
+                                .or_insert_with(|| TcpStreamReassembler::new(1024 * 1024, payload_seq));
+                            let contiguous = stream.push(payload_seq, payload);
+                            stream_has_gaps = stream.has_gaps();
+                            if !contiguous.is_empty() { reassembled_payload = Some(contiguous); }
+                        }
 
                         // Check for BGP (Port 179)
                         if src_port == 179 || dst_port == 179 {
@@ -372,37 +400,53 @@ impl PacketProcessor {
             
             // Check for Plugin Override
             if matches!(protocol_info, protocols::ProtocolInfo::Unknown) && (src_port > 0 || dst_port > 0) {
+                 let plugin_payload = reassembled_payload.as_deref().unwrap_or(payload);
+                 if l4_protocol == "TCP" && !payload.is_empty() && reassembled_payload.is_none() {
+                     return Ok(());
+                 }
                  // Check if we have a plugin for either port
-                 let plugin_port = if self.plugin_manager.get_plugin(src_port).is_some() {
-                     Some(src_port)
-                 } else if self.plugin_manager.get_plugin(dst_port).is_some() {
-                     Some(dst_port)
-                 } else {
-                     None
-                 };
-
-                 if let Some(port) = plugin_port {
-                     if let Some(plugin) = self.plugin_manager.get_plugin(port) {
+                 if let Some(plugin) = self.plugin_manager.match_plugin(src_port, dst_port, plugin_payload) {
                          // We need to lock the plugin instance to use it
                          if let Ok(mut plugin_instance) = plugin.lock() {
                              use crate::protocols::plugin::plugin_proto::PluginParseRequest;
                              
                              let req = PluginParseRequest {
-                                 payload: payload.to_vec(),
+                                 payload: plugin_payload.to_vec(),
                                  src_ip: src_ip.clone(),
                                  src_port: src_port as u32,
                                  dst_ip: dst_ip.clone(),
                                  dst_port: dst_port as u32,
                                  protocol: l4_protocol.to_string(),
+                                 api_version: "packetrecorder.plugin/v1".to_string(),
+                                 flow_id: format!("{}:{}-{}:{}-{}", src_ip, src_port, dst_ip, dst_port, l4_protocol),
+                                 direction: "unknown".to_string(),
+                                 captured_length: plugin_payload.len() as u32,
+                                 original_length: plugin_payload.len() as u32,
+                                 stream_has_gaps,
                              };
                              
                              match plugin_instance.parse(req) {
                                  Ok(resp) => {
                                      if resp.success {
+                                         if let (Some(sink), Some(session_id)) = (&self.finding_sink, &self.session_id) {
+                                             let flow_id = format!("{}:{}-{}:{}-{}", src_ip, src_port, dst_ip, dst_port, l4_protocol);
+                                             for finding in &resp.findings {
+                                                 let _ = sink.try_send(PluginFindingRecord {
+                                                     session_id: session_id.clone(), timestamp, flow_id: flow_id.clone(),
+                                                     plugin_name: resp.name.clone(), severity: finding.severity.clone(),
+                                                     title: finding.title.clone(), description: finding.description.clone(),
+                                                 });
+                                             }
+                                         }
                                          use crate::protocols::plugin::PluginInfo;
                                          protocol_info = protocols::ProtocolInfo::Plugin(PluginInfo {
                                              name: resp.name,
                                              attributes: resp.attributes,
+                                             summary: resp.summary,
+                                             confidence: resp.confidence,
+                                             fields: resp.fields,
+                                             annotations: resp.annotations,
+                                             findings: resp.findings,
                                          });
                                          info!("Plugin decoded protocol: {:?}", protocol_info);
                                      } else {
@@ -414,7 +458,6 @@ impl PacketProcessor {
                                  }
                              }
                          }
-                     }
                  }
             }
 

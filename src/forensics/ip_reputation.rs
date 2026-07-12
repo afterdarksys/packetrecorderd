@@ -93,13 +93,13 @@ pub fn classify_ip_type(ip: &str) -> NetworkType {
     // 2. Query DarkAPI/DNSScience for classification
     // 3. Maintain ASN-to-type mappings
     
-    // Common datacenter IP ranges (very basic heuristics)
-    if is_common_hosting_range(ip) {
-        return NetworkType::Hosting;
-    }
-    
+    // Check specific CDN ranges before broad cloud/hosting prefixes.
     if is_common_cdn_range(ip) {
         return NetworkType::Cdn;
+    }
+
+    if is_common_hosting_range(ip) {
+        return NetworkType::Hosting;
     }
     
     // Default to unknown - API lookup required for accurate classification
