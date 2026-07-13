@@ -328,17 +328,25 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
     
     let mut senders = Vec::new();
     let mut handles = Vec::new();
+    let mut shared_plugin_manager = protocols::plugin::PluginManager::new();
+    if let Some(config) = plugins_config {
+        for plugin in config.plugins {
+            let name = plugin.name.clone();
+            if let Err(error) = shared_plugin_manager.register_config(plugin) {
+                tracing::warn!(?error, plugin = %name, "Failed to register plugin");
+            }
+        }
+    }
     
     for i in 0..num_threads {
         // Analysis must not consume unbounded memory or stall recording under load.
-        let (tx, rx): (Sender<(DateTime<Utc>, Vec<u8>)>, Receiver<(DateTime<Utc>, Vec<u8>)>) = bounded(8192);
+        let (tx, rx): (Sender<(DateTime<Utc>, Vec<u8>, u32)>, Receiver<(DateTime<Utc>, Vec<u8>, u32)>) = bounded(8192);
         senders.push(tx);
         
         // Clone forensics for sharing
         let forensics_clone = forensics.clone();
         
-        // Clone plugins config for sharing (it's cloneable)
-        let plugins_config_clone = plugins_config.clone();
+        let plugin_manager = shared_plugin_manager.clone();
         
         // Clone gossip service
         let gossip_clone = Some(gossip.clone());
@@ -349,12 +357,12 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
         
         // Spawn worker
         let handle = thread::spawn(move || {
-            let mut processor = PacketProcessor::new(forensics_clone, plugins_config_clone, gossip_clone, model_client_clone)
+            let mut processor = PacketProcessor::new_with_plugin_manager(forensics_clone, plugin_manager, gossip_clone, model_client_clone)
                 .with_finding_sink(session_id_clone, finding_tx_clone);
             info!("Worker {} started", i);
             
-            while let Ok((timestamp, data)) = rx.recv() {
-                if let Err(e) = processor.process(timestamp, &data) {
+            while let Ok((timestamp, data, original_length)) = rx.recv() {
+                if let Err(e) = processor.process_with_original_length(timestamp, &data, original_length) {
                     error!("Worker {} error: {:?}", i, e);
                 }
             }
@@ -382,6 +390,7 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
     
     let mut packet_count = 0u64;
     let start_time = std::time::Instant::now();
+    let mut last_flush = std::time::Instant::now();
     
     // Set up Ctrl+C handler
     let stopping = Arc::new(AtomicBool::new(false));
@@ -399,8 +408,12 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
         }
         match session.next_packet() {
             Ok(packet) => {
-                let timestamp = capture_timestamp(packet.header)?;
+                let timestamp = capture_timestamp(packet.header).unwrap_or_else(|error| {
+                    tracing::warn!(?error, "Invalid capture timestamp; using current time");
+                    Utc::now()
+                });
                 let data = packet.data.to_vec();
+                let original_length = packet.header.len;
                 
                 // 1. Write packet (I/O bound, async)
                 if let Err(e) = writer.write_packet(timestamp, data.clone()).await {
@@ -415,7 +428,7 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
                 let hash = get_flow_hash(&data);
                 let worker_idx = (hash as usize) % num_threads;
                 
-                match senders[worker_idx].try_send((timestamp, data)) {
+                match senders[worker_idx].try_send((timestamp, data, original_length)) {
                     Ok(()) => {}
                     Err(TrySendError::Full(_)) => {
                         if packet_count.is_multiple_of(1000) {
@@ -429,6 +442,13 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
                 
                 if packet_count.is_multiple_of(1000) {
                     info!("Captured {} packets", packet_count);
+                }
+
+                if last_flush.elapsed() >= std::time::Duration::from_secs(1) {
+                    if let Err(error) = writer.flush().await {
+                        error!(?error, "Failed to flush packet writers");
+                    }
+                    last_flush = std::time::Instant::now();
                 }
                 
                 // Check limits
@@ -445,6 +465,12 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
             Err(e) => {
                 // Timeout is normal, just continue
                 if e.to_string().contains("timeout") {
+                    if last_flush.elapsed() >= std::time::Duration::from_secs(1) {
+                        if let Err(error) = writer.flush().await {
+                            error!(?error, "Failed to flush packet writers");
+                        }
+                        last_flush = std::time::Instant::now();
+                    }
                     continue;
                 }
                 error!("Error capturing packet: {:?}", e);

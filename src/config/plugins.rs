@@ -25,9 +25,13 @@ pub struct PayloadSignature {
 
 impl PayloadSignature {
     pub fn matches(&self, payload: &[u8]) -> Result<bool> {
-        let bytes = hex::decode(&self.hex).context("payload signature must be valid hexadecimal")?;
+        let bytes = self.decoded()?;
         let end = self.offset.checked_add(bytes.len()).context("payload signature offset overflow")?;
         Ok(payload.get(self.offset..end) == Some(bytes.as_slice()))
+    }
+
+    pub fn decoded(&self) -> Result<Vec<u8>> {
+        hex::decode(&self.hex).context("payload signature must be valid hexadecimal")
     }
 }
 

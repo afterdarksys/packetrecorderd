@@ -2,10 +2,12 @@ use anyhow::{Result, Context};
 use std::process::{Command, Stdio, Child};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::io::{Write, Read};
+use std::io::Read;
+#[cfg(not(unix))]
+use std::io::Write;
 use tracing::{info, warn};
 use prost::Message;
-use crate::config::plugins::{PluginConfig, PluginLimits, PayloadSignature};
+use crate::config::plugins::{PluginConfig, PluginLimits};
 
 // Include the generated proto modules
 pub mod plugin_proto {
@@ -28,7 +30,7 @@ impl CircuitBreaker {
     fn allow(&mut self) -> bool {
         match self.opened_at {
             Some(opened) if opened.elapsed() < self.cooldown => false,
-            Some(_) => { self.opened_at = None; true }
+            Some(_) => { self.opened_at = None; self.failures = 0; true }
             None => true,
         }
     }
@@ -51,9 +53,10 @@ pub struct PluginInfo {
     pub findings: Vec<plugin_proto::Finding>,
 }
 
+#[derive(Clone)]
 pub struct PluginManager {
     plugins: HashMap<u16, Arc<Mutex<PluginInstance>>>,
-    signatures: Vec<(PayloadSignature, Arc<Mutex<PluginInstance>>)>,
+    signatures: Vec<(usize, Vec<u8>, Arc<Mutex<PluginInstance>>)>,
 }
 
 impl PluginManager {
@@ -70,14 +73,18 @@ impl PluginManager {
             config.name, config.executable, config.args, config.limits,
         )?));
         for port in config.ports { self.plugins.insert(port, Arc::clone(&instance)); }
-        for signature in config.signatures { self.signatures.push((signature, Arc::clone(&instance))); }
+        for signature in config.signatures {
+            self.signatures.push((signature.offset, signature.decoded()?, Arc::clone(&instance)));
+        }
         Ok(())
     }
 
     pub fn match_plugin(&self, src_port: u16, dst_port: u16, payload: &[u8]) -> Option<Arc<Mutex<PluginInstance>>> {
         self.get_plugin(src_port).or_else(|| self.get_plugin(dst_port)).or_else(|| {
-            self.signatures.iter().find_map(|(selector, plugin)|
-                selector.matches(payload).ok().filter(|matched| *matched).map(|_| Arc::clone(plugin)))
+            self.signatures.iter().find_map(|(offset, signature, plugin)| {
+                let end = offset.checked_add(signature.len())?;
+                (payload.get(*offset..end) == Some(signature.as_slice())).then(|| Arc::clone(plugin))
+            })
         })
     }
 
@@ -181,22 +188,25 @@ impl PluginInstance {
         let mut buf = Vec::new();
         request.encode(&mut buf)?;
         let len = buf.len() as u32;
-        stdin.write_all(&len.to_be_bytes())?;
-        stdin.write_all(&buf)?;
-        stdin.flush()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(self.limits.timeout_ms);
+        let mut framed = Vec::with_capacity(4 + buf.len());
+        framed.extend_from_slice(&len.to_be_bytes());
+        framed.extend_from_slice(&buf);
+        write_all_with_deadline(stdin, &framed, deadline)?;
 
         // Read length-prefixed response
         let mut len_buf = [0u8; 4];
-        read_exact_with_timeout(stdout, &mut len_buf, self.limits.timeout_ms)?;
+        read_exact_with_deadline(stdout, &mut len_buf, deadline)?;
         
         let response_len = u32::from_be_bytes(len_buf) as usize;
         if response_len > self.limits.max_response_bytes {
             anyhow::bail!("plugin response exceeds configured limit");
         }
         let mut response_buf = vec![0u8; response_len];
-        read_exact_with_timeout(stdout, &mut response_buf, self.limits.timeout_ms)?;
+        read_exact_with_deadline(stdout, &mut response_buf, deadline)?;
 
-        let response = PluginParseResponse::decode(&response_buf[..])?;
+        let mut response = PluginParseResponse::decode(&response_buf[..])?;
+        response.annotations.retain(|annotation| annotation.length != 0);
         self.validate_response(&response, request.payload.len())?;
         Ok(response)
     }
@@ -214,7 +224,7 @@ impl PluginInstance {
         for annotation in &response.annotations {
             let end = (annotation.offset as usize).checked_add(annotation.length as usize)
                 .context("plugin annotation overflow")?;
-            if annotation.length == 0 || end > payload_len {
+            if end > payload_len {
                 anyhow::bail!("plugin annotation is outside the supplied payload");
             }
         }
@@ -230,10 +240,10 @@ impl PluginInstance {
 }
 
 #[cfg(unix)]
-fn read_exact_with_timeout(
+fn read_exact_with_deadline(
     reader: &mut std::process::ChildStdout,
     mut buffer: &mut [u8],
-    timeout_ms: u64,
+    deadline: std::time::Instant,
 ) -> Result<()> {
     use std::os::fd::AsRawFd;
     while !buffer.is_empty() {
@@ -242,9 +252,12 @@ fn read_exact_with_timeout(
             events: libc::POLLIN,
             revents: 0,
         };
-        let ready = unsafe { libc::poll(&mut descriptor, 1, timeout_ms.min(i32::MAX as u64) as i32) };
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() { anyhow::bail!("plugin response timed out"); }
+        let timeout_ms = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+        let ready = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
         if ready == 0 {
-            anyhow::bail!("plugin response timed out after {}ms", timeout_ms);
+            anyhow::bail!("plugin response timed out");
         }
         if ready < 0 {
             return Err(std::io::Error::last_os_error()).context("failed waiting for plugin response");
@@ -259,12 +272,48 @@ fn read_exact_with_timeout(
 }
 
 #[cfg(not(unix))]
-fn read_exact_with_timeout(
+fn read_exact_with_deadline(
     reader: &mut std::process::ChildStdout,
     buffer: &mut [u8],
-    _timeout_ms: u64,
+    _deadline: std::time::Instant,
 ) -> Result<()> {
     reader.read_exact(buffer).context("failed reading plugin response")
+}
+
+#[cfg(unix)]
+fn write_all_with_deadline(
+    writer: &mut std::process::ChildStdin,
+    mut buffer: &[u8],
+    deadline: std::time::Instant,
+) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    while !buffer.is_empty() {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() { anyhow::bail!("plugin request timed out"); }
+        let mut descriptor = libc::pollfd {
+            fd: writer.as_raw_fd(), events: libc::POLLOUT, revents: 0,
+        };
+        let timeout_ms = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+        let ready = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+        if ready == 0 { anyhow::bail!("plugin request timed out"); }
+        if ready < 0 { return Err(std::io::Error::last_os_error()).context("failed waiting for plugin stdin"); }
+        let chunk_len = buffer.len().min(4096);
+        let written = unsafe {
+            libc::write(writer.as_raw_fd(), buffer.as_ptr().cast(), chunk_len)
+        };
+        if written < 0 { return Err(std::io::Error::last_os_error()).context("failed writing plugin request"); }
+        buffer = &buffer[written as usize..];
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_all_with_deadline(
+    writer: &mut std::process::ChildStdin,
+    buffer: &[u8],
+    _deadline: std::time::Instant,
+) -> Result<()> {
+    writer.write_all(buffer).context("failed writing plugin request")
 }
 
 impl Drop for PluginInstance {
@@ -278,6 +327,14 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn test_instance_without_process() -> PluginInstance {
+        PluginInstance {
+            name: "test".to_string(), executable: "unused".to_string(), args: Vec::new(),
+            limits: PluginLimits::default(), child: None,
+            circuit: CircuitBreaker::new(3, std::time::Duration::from_secs(30)),
+        }
+    }
+
     #[test]
     fn test_plugin_communication() {
         // Find the example plugin
@@ -290,11 +347,13 @@ mod tests {
             return;
         }
 
+        let mut limits = PluginLimits::default();
+        limits.timeout_ms = 5_000;
         let mut instance = PluginInstance::new(
             "test_plugin".to_string(),
             "python3".to_string(),
             vec![plugin_path],
-            PluginLimits::default(),
+            limits,
         ).expect("Failed to create plugin instance");
 
         let req = PluginParseRequest {
@@ -324,14 +383,7 @@ mod tests {
 
     #[test]
     fn rejects_out_of_bounds_annotations() {
-        let instance = PluginInstance {
-            name: "test".to_string(),
-            executable: "unused".to_string(),
-            args: Vec::new(),
-            limits: PluginLimits::default(),
-            child: None,
-            circuit: CircuitBreaker::new(3, std::time::Duration::from_secs(30)),
-        };
+        let instance = test_instance_without_process();
         let response = PluginParseResponse {
             api_version: "packetrecorder.plugin/v1".to_string(),
             confidence: 1.0,
@@ -344,6 +396,18 @@ mod tests {
             ..Default::default()
         };
         assert!(instance.validate_response(&response, 8).is_err());
+    }
+
+    #[test]
+    fn accepts_zero_length_annotations_for_filtering() {
+        let instance = test_instance_without_process();
+        let response = PluginParseResponse {
+            api_version: "packetrecorder.plugin/v1".to_string(),
+            confidence: 1.0,
+            annotations: vec![plugin_proto::ByteAnnotation { offset: 0, length: 0, ..Default::default() }],
+            ..Default::default()
+        };
+        assert!(instance.validate_response(&response, 0).is_ok());
     }
 
     #[test]
@@ -377,5 +441,20 @@ mod tests {
         assert!(circuit.allow());
         circuit.success();
         assert_eq!(circuit.consecutive_failures(), 0);
+    }
+
+    #[test]
+    fn half_open_attempt_starts_a_new_failure_window() {
+        let mut circuit = CircuitBreaker::new(3, std::time::Duration::from_millis(1));
+        circuit.failure();
+        circuit.failure();
+        circuit.failure();
+        circuit.opened_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+
+        assert!(circuit.allow());
+        circuit.failure();
+
+        assert_eq!(circuit.consecutive_failures(), 1);
+        assert!(circuit.allow());
     }
 }

@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
 
@@ -56,11 +56,11 @@ impl DatabaseWriter {
 
 impl PacketWriter for DatabaseWriter {
     fn write_packet(&mut self, timestamp: DateTime<Utc>, data: &[u8]) -> Result<()> {
-        self.pending.push((timestamp, data.to_vec()));
-        self.packet_count += 1;
         if self.pending.len() >= 512 {
             self.flush()?;
         }
+        self.pending.push((timestamp, data.to_vec()));
+        self.packet_count += 1;
         
         if self.packet_count.is_multiple_of(1000) {
             debug!("Saved {} packets to database", self.packet_count);
@@ -87,7 +87,7 @@ impl PacketWriter for DatabaseWriter {
 
 /// Writer that saves packets to a PCAP file
 pub struct PcapWriter {
-    writer: Option<pcap_file::pcap::PcapWriter<BufWriter<std::fs::File>>>,
+    writer: Option<pcap_file::pcap::PcapWriter<std::fs::File>>,
     packet_count: u64,
 }
 
@@ -96,7 +96,7 @@ impl PcapWriter {
     pub fn new(path: &std::path::Path) -> Result<Self> {
         let file = create_private_file(path).context("Failed to create PCAP file")?;
         
-        let writer = pcap_file::pcap::PcapWriter::new(BufWriter::with_capacity(1024 * 1024, file))
+        let writer = pcap_file::pcap::PcapWriter::new(file)
             .context("Failed to create PCAP writer")?;
         
         info!("Created PCAP writer: {:?}", path);
@@ -135,7 +135,7 @@ impl PacketWriter for PcapWriter {
     }
     
     fn flush(&mut self) -> Result<()> {
-        // pcap-file does not expose its inner writer; close performs the durable flush.
+        // File writes are unbuffered at the application layer.
         Ok(())
     }
     
@@ -150,7 +150,7 @@ impl PacketWriter for PcapWriter {
 
 fn create_private_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
+    options.create_new(true).write(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -279,5 +279,15 @@ mod tests {
         
         let session = store.lock().unwrap().get_session(&session_id).unwrap().unwrap();
         assert_eq!(session.packet_count, 1);
+    }
+
+    #[test]
+    fn pcap_writer_refuses_to_overwrite_existing_file() {
+        let path = std::env::temp_dir().join(format!("packetrecorder-existing-{}.pcap", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"keep me").unwrap();
+        let error = PcapWriter::new(&path).err().expect("existing file must be rejected");
+        assert!(error.to_string().contains("Failed to create PCAP file"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep me");
+        std::fs::remove_file(path).unwrap();
     }
 }

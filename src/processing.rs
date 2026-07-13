@@ -93,6 +93,11 @@ struct FlowState {
     last_seen: DateTime<Utc>,
 }
 
+struct PluginStreamState {
+    reassembler: TcpStreamReassembler,
+    last_seen: DateTime<Utc>,
+}
+
 pub struct PacketProcessor {
     forensics: ForensicsEngine,
     tls_parser: TlsParser,
@@ -108,7 +113,8 @@ pub struct PacketProcessor {
     ssh_parser: SshParser,
     bittorrent_parser: BitTorrentParser,
     flow_table: HashMap<FlowKey, FlowState>,
-    plugin_streams: HashMap<FlowKey, TcpStreamReassembler>,
+    plugin_streams: HashMap<FlowKey, PluginStreamState>,
+    last_cleanup: DateTime<Utc>,
     ml_processor: MLProcessor,
     plugin_manager: PluginManager,
     gossip: Option<Arc<GossipService>>,
@@ -118,18 +124,14 @@ pub struct PacketProcessor {
 }
 
 impl PacketProcessor {
+    const MAX_PLUGIN_STREAM_BYTES: usize = 64 * 1024 * 1024;
+    const MAX_PLUGIN_STREAMS: usize = 100_000;
     pub fn new(
         forensics: ForensicsEngine,
         plugins_config: Option<PluginsConfig>,
         gossip: Option<Arc<GossipService>>,
         model_client: Option<Arc<crate::model_client::ModelApiClient>>,
     ) -> Self {
-        let mut ml_processor = MLProcessor::new(model_client.clone());
-        // Load models potentially in a background thread or here if fast
-        if let Err(e) = ml_processor.load_models() {
-            warn!("Failed to load ML models: {:?}", e);
-        }
-
         let mut plugin_manager = PluginManager::new();
         if let Some(config) = plugins_config {
             for plugin in config.plugins {
@@ -138,6 +140,20 @@ impl PacketProcessor {
                     warn!("Failed to register plugin '{}': {:?}", name, e);
                 }
             }
+        }
+        Self::new_with_plugin_manager(forensics, plugin_manager, gossip, model_client)
+    }
+
+    pub fn new_with_plugin_manager(
+        forensics: ForensicsEngine,
+        plugin_manager: PluginManager,
+        gossip: Option<Arc<GossipService>>,
+        model_client: Option<Arc<crate::model_client::ModelApiClient>>,
+    ) -> Self {
+        let mut ml_processor = MLProcessor::new(model_client.clone());
+        // Load models potentially in a background thread or here if fast
+        if let Err(e) = ml_processor.load_models() {
+            warn!("Failed to load ML models: {:?}", e);
         }
 
         Self {
@@ -156,6 +172,7 @@ impl PacketProcessor {
             bittorrent_parser: BitTorrentParser::new(),
             flow_table: HashMap::new(),
             plugin_streams: HashMap::new(),
+            last_cleanup: Utc::now(),
             ml_processor,
             plugin_manager,
             gossip,
@@ -177,12 +194,24 @@ impl PacketProcessor {
         self.flow_table.retain(|_, state| {
             now.signed_duration_since(state.last_seen) < ttl
         });
-        if self.plugin_streams.len() > 100_000 {
-            self.plugin_streams.clear();
-        }
+        self.plugin_streams.retain(|_, state|
+            now.signed_duration_since(state.last_seen) < ttl);
         
         // Cleanup forensics state
         self.forensics.cleanup_state();
+    }
+
+    fn enforce_plugin_stream_budget(&mut self) {
+        let mut buffered: usize = self.plugin_streams.values()
+            .map(|state| state.reassembler.pending_bytes()).sum();
+        while buffered > Self::MAX_PLUGIN_STREAM_BYTES || self.plugin_streams.len() > Self::MAX_PLUGIN_STREAMS {
+            let Some(oldest) = self.plugin_streams.iter()
+                .min_by_key(|(_, state)| state.last_seen)
+                .map(|(key, _)| key.clone()) else { break };
+            if let Some(removed) = self.plugin_streams.remove(&oldest) {
+                buffered = buffered.saturating_sub(removed.reassembler.pending_bytes());
+            }
+        }
     }
 
     fn describe_icmp(version: u8, type_: u8, code: u8) -> String {
@@ -209,9 +238,13 @@ impl PacketProcessor {
     }
 
     pub fn process(&mut self, timestamp: DateTime<Utc>, data: &[u8]) -> Result<()> {
-        // Periodically clean up stale flows (every 1000 packets or so)
-        if self.flow_table.len() % 1000 == 0 && !self.flow_table.is_empty() {
+        self.process_with_original_length(timestamp, data, data.len() as u32)
+    }
+
+    pub fn process_with_original_length(&mut self, timestamp: DateTime<Utc>, data: &[u8], original_length: u32) -> Result<()> {
+        if timestamp.signed_duration_since(self.last_cleanup) >= Duration::seconds(30) {
             self.cleanup_stale_flows(timestamp);
+            self.last_cleanup = timestamp;
         }
 
         if let Ok(sliced) = etherparse::SlicedPacket::from_ethernet(data) {
@@ -263,10 +296,15 @@ impl PacketProcessor {
                             let key = FlowKey { src_ip: src_ip.clone(), dst_ip: dst_ip.clone(), src_port, dst_port, protocol: 6 };
                             let payload_seq = tcp.sequence_number().wrapping_add(u32::from(tcp.syn()));
                             let stream = self.plugin_streams.entry(key)
-                                .or_insert_with(|| TcpStreamReassembler::new(1024 * 1024, payload_seq));
-                            let contiguous = stream.push(payload_seq, payload);
-                            stream_has_gaps = stream.has_gaps();
+                                .or_insert_with(|| PluginStreamState {
+                                    reassembler: TcpStreamReassembler::new(1024 * 1024, payload_seq),
+                                    last_seen: timestamp,
+                                });
+                            stream.last_seen = timestamp;
+                            let contiguous = stream.reassembler.push(payload_seq, payload);
+                            stream_has_gaps = stream.reassembler.has_gaps();
                             if !contiguous.is_empty() { reassembled_payload = Some(contiguous); }
+                            self.enforce_plugin_stream_budget();
                         }
 
                         // Check for BGP (Port 179)
@@ -401,13 +439,13 @@ impl PacketProcessor {
             // Check for Plugin Override
             if matches!(protocol_info, protocols::ProtocolInfo::Unknown) && (src_port > 0 || dst_port > 0) {
                  let plugin_payload = reassembled_payload.as_deref().unwrap_or(payload);
-                 if l4_protocol == "TCP" && !payload.is_empty() && reassembled_payload.is_none() {
-                     return Ok(());
-                 }
+                 let plugin_can_parse = l4_protocol != "TCP" || payload.is_empty() || reassembled_payload.is_some();
                  // Check if we have a plugin for either port
-                 if let Some(plugin) = self.plugin_manager.match_plugin(src_port, dst_port, plugin_payload) {
+                 if plugin_can_parse {
+                   if let Some(plugin) = self.plugin_manager.match_plugin(src_port, dst_port, plugin_payload) {
                          // We need to lock the plugin instance to use it
-                         if let Ok(mut plugin_instance) = plugin.lock() {
+                         match plugin.lock() {
+                           Ok(mut plugin_instance) => {
                              use crate::protocols::plugin::plugin_proto::PluginParseRequest;
                              
                              let req = PluginParseRequest {
@@ -420,8 +458,8 @@ impl PacketProcessor {
                                  api_version: "packetrecorder.plugin/v1".to_string(),
                                  flow_id: format!("{}:{}-{}:{}-{}", src_ip, src_port, dst_ip, dst_port, l4_protocol),
                                  direction: "unknown".to_string(),
-                                 captured_length: plugin_payload.len() as u32,
-                                 original_length: plugin_payload.len() as u32,
+                                 captured_length: data.len() as u32,
+                                 original_length,
                                  stream_has_gaps,
                              };
                              
@@ -431,11 +469,13 @@ impl PacketProcessor {
                                          if let (Some(sink), Some(session_id)) = (&self.finding_sink, &self.session_id) {
                                              let flow_id = format!("{}:{}-{}:{}-{}", src_ip, src_port, dst_ip, dst_port, l4_protocol);
                                              for finding in &resp.findings {
-                                                 let _ = sink.try_send(PluginFindingRecord {
+                                                 if let Err(error) = sink.try_send(PluginFindingRecord {
                                                      session_id: session_id.clone(), timestamp, flow_id: flow_id.clone(),
                                                      plugin_name: resp.name.clone(), severity: finding.severity.clone(),
                                                      title: finding.title.clone(), description: finding.description.clone(),
-                                                 });
+                                                 }) {
+                                                     warn!(?error, "Plugin finding queue is full; finding dropped");
+                                                 }
                                              }
                                          }
                                          use crate::protocols::plugin::PluginInfo;
@@ -457,7 +497,10 @@ impl PacketProcessor {
                                      warn!("Error invoking plugin: {:?}", e);
                                  }
                              }
+                           }
+                           Err(error) => warn!(?error, "Plugin lock is poisoned; decoder skipped"),
                          }
+                   }
                  }
             }
 

@@ -1,5 +1,8 @@
 use lazy_static::lazy_static;
 use prometheus::{Counter, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, Registry};
+use std::sync::Once;
+
+static REGISTER_METRICS: Once = Once::new();
 
 lazy_static! {
     pub static ref REGISTRY: Registry = Registry::new();
@@ -65,6 +68,7 @@ lazy_static! {
 }
 
 pub fn register_metrics() {
+  REGISTER_METRICS.call_once(|| {
     REGISTRY.register(Box::new(PACKETS_TOTAL.clone())).unwrap();
     REGISTRY.register(Box::new(BYTES_TOTAL.clone())).unwrap();
     REGISTRY.register(Box::new(PACKETS_DROPPED.clone())).unwrap();
@@ -74,6 +78,7 @@ pub fn register_metrics() {
     REGISTRY.register(Box::new(DB_WRITE_TIME.clone())).unwrap();
     REGISTRY.register(Box::new(PLUGIN_INVOCATIONS.clone())).unwrap();
     REGISTRY.register(Box::new(PLUGIN_LATENCY.clone())).unwrap();
+  });
 }
 
 pub fn metrics_text() -> String {
@@ -83,4 +88,13 @@ pub fn metrics_text() -> String {
     let mut buffer = Vec::new();
     encoder.encode(&metric_families, &mut buffer).unwrap();
     String::from_utf8(buffer).unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn metric_registration_is_idempotent() {
+        super::register_metrics();
+        super::register_metrics();
+    }
 }
