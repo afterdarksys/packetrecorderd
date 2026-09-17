@@ -9,6 +9,49 @@ message PluginParseRequest {
   string dst_ip = 4;
   uint32 dst_port = 5;
   string protocol = 6; // "TCP" or "UDP"
+  string api_version = 7;
+  string flow_id = 8;
+  string direction = 9;
+  uint32 captured_length = 10;
+  uint32 original_length = 11;
+  bool stream_has_gaps = 12;
+}
+
+enum FieldType {
+  FIELD_TYPE_UNSPECIFIED = 0;
+  FIELD_TYPE_STRING = 1;
+  FIELD_TYPE_UINT = 2;
+  FIELD_TYPE_BOOL = 3;
+  FIELD_TYPE_BYTES = 4;
+  FIELD_TYPE_IP_ADDRESS = 5;
+}
+
+message TypedField {
+  string name = 1;
+  FieldType type = 2;
+  string display_value = 3;
+  bytes raw_value = 4;
+}
+
+message ByteAnnotation {
+  uint32 offset = 1;
+  uint32 length = 2;
+  string field_name = 3;
+  bool sensitive = 4;
+}
+
+message Finding {
+  string severity = 1;
+  string title = 2;
+  string description = 3;
+}
+
+enum ParseStatus {
+  PARSE_STATUS_UNSPECIFIED = 0;
+  PARSE_STATUS_MATCHED = 1;
+  PARSE_STATUS_NO_MATCH = 2;
+  PARSE_STATUS_NEED_MORE_DATA = 3;
+  PARSE_STATUS_MALFORMED = 4;
 }
 
 message PluginParseResponse {
@@ -16,4 +59,11 @@ message PluginParseResponse {
   string name = 2; // e.g. "MyCustomProtocol"
   map<string, string> attributes = 3;
   string error_message = 4;
+  string api_version = 5;
+  ParseStatus status = 6;
+  float confidence = 7;
+  string summary = 8;
+  repeated TypedField fields = 9;
+  repeated ByteAnnotation annotations = 10;
+  repeated Finding findings = 11;
 }

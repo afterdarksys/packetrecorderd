@@ -158,7 +158,13 @@ async fn stats() -> Json<StatsResponse> {
     })
 }
 
-async fn list_sessions(State(state): State<ApiState>) -> Result<Json<Vec<SessionResponse>>, StatusCode> {
+async fn list_sessions(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<SessionResponse>>, StatusCode> {
+    if !authorized(&headers, &state.api_keys) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
     let store = state.store.lock().unwrap();
     
     match store.list_sessions() {

@@ -1,3 +1,10 @@
 Need protocol debuggging supprt for:
 
+Plugin decoder debugging checklist:
+- Validate the manifest API version, executable, argument array, ports, and limits at startup.
+- A response must use `packetrecorder.plugin/v1`, confidence 0..1, and annotations contained in the supplied payload.
+- `NEED_MORE_DATA` distinguishes partial captures or future stream reassembly from malformed traffic.
+- Byte annotations power hex highlighting; set `sensitive` for credentials and proprietary secrets.
+- Recording remains authoritative when analysis overloads; plugin decoding may be sampled or dropped.
+- Reproduce failures offline using the original PCAP and the same plugin executable/version.
 

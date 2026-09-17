@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
 
@@ -23,6 +24,7 @@ pub struct DatabaseWriter {
     store: Arc<Mutex<PacketStore>>,
     session_id: String,
     packet_count: u64,
+    pending: Vec<(DateTime<Utc>, Vec<u8>)>,
 }
 
 impl DatabaseWriter {
@@ -37,6 +39,7 @@ impl DatabaseWriter {
             store,
             session_id,
             packet_count: 0,
+            pending: Vec::with_capacity(512),
         })
     }
     
@@ -53,8 +56,10 @@ impl DatabaseWriter {
 
 impl PacketWriter for DatabaseWriter {
     fn write_packet(&mut self, timestamp: DateTime<Utc>, data: &[u8]) -> Result<()> {
-        self.store.lock().unwrap().save_packet(&self.session_id, timestamp, data)
-            .context("Failed to save packet to database")?;
+        if self.pending.len() >= 512 {
+            self.flush()?;
+        }
+        self.pending.push((timestamp, data.to_vec()));
         self.packet_count += 1;
         
         if self.packet_count.is_multiple_of(1000) {
@@ -65,28 +70,31 @@ impl PacketWriter for DatabaseWriter {
     }
     
     fn flush(&mut self) -> Result<()> {
-        // SQLite commits are handled automatically
+        self.store.lock().map_err(|_| anyhow::anyhow!("packet store lock poisoned"))?
+            .save_packets(&self.session_id, &self.pending)
+            .context("Failed to save packet batch")?;
+        self.pending.clear();
         Ok(())
     }
     
     fn close(&mut self) -> Result<()> {
+        self.flush()?;
         info!("Closing database writer, {} packets saved", self.packet_count);
-        self.store.lock().unwrap().end_session(&self.session_id)
+        self.store.lock().map_err(|_| anyhow::anyhow!("packet store lock poisoned"))?.end_session(&self.session_id)
             .context("Failed to end session")
     }
 }
 
 /// Writer that saves packets to a PCAP file
 pub struct PcapWriter {
-    writer: pcap_file::pcap::PcapWriter<std::fs::File>,
+    writer: Option<pcap_file::pcap::PcapWriter<std::fs::File>>,
     packet_count: u64,
 }
 
 impl PcapWriter {
     /// Create a new PCAP writer
     pub fn new(path: &std::path::Path) -> Result<Self> {
-        let file = std::fs::File::create(path)
-            .context("Failed to create PCAP file")?;
+        let file = create_private_file(path).context("Failed to create PCAP file")?;
         
         let writer = pcap_file::pcap::PcapWriter::new(file)
             .context("Failed to create PCAP writer")?;
@@ -94,7 +102,7 @@ impl PcapWriter {
         info!("Created PCAP writer: {:?}", path);
         
         Ok(Self {
-            writer,
+            writer: Some(writer),
             packet_count: 0,
         })
     }
@@ -108,11 +116,13 @@ impl PcapWriter {
 impl PacketWriter for PcapWriter {
     fn write_packet(&mut self, timestamp: DateTime<Utc>, data: &[u8]) -> Result<()> {
         // Convert timestamp to Duration since UNIX epoch
-        let duration = std::time::Duration::from_micros(timestamp.timestamp_micros() as u64);
+        let micros = u64::try_from(timestamp.timestamp_micros())
+            .context("PCAP timestamps before the Unix epoch are unsupported")?;
+        let duration = std::time::Duration::from_micros(micros);
         
         let packet = pcap_file::pcap::PcapPacket::new(duration, data.len() as u32, data);
         
-        self.writer.write_packet(&packet)
+        self.writer.as_mut().context("PCAP writer is closed")?.write_packet(&packet)
             .context("Failed to write packet to PCAP file")?;
         
         self.packet_count += 1;
@@ -125,14 +135,34 @@ impl PacketWriter for PcapWriter {
     }
     
     fn flush(&mut self) -> Result<()> {
-        // Flush is handled automatically by the writer
+        // File writes are unbuffered at the application layer.
         Ok(())
     }
     
     fn close(&mut self) -> Result<()> {
         info!("Closing PCAP writer, {} packets saved", self.packet_count);
+        if let Some(writer) = self.writer.take() {
+            writer.into_writer().flush().context("Failed to flush PCAP file")?;
+        }
         Ok(())
     }
+}
+
+fn create_private_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(file)
 }
 
 /// Writer that writes to multiple destinations
@@ -249,5 +279,15 @@ mod tests {
         
         let session = store.lock().unwrap().get_session(&session_id).unwrap().unwrap();
         assert_eq!(session.packet_count, 1);
+    }
+
+    #[test]
+    fn pcap_writer_refuses_to_overwrite_existing_file() {
+        let path = std::env::temp_dir().join(format!("packetrecorder-existing-{}.pcap", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"keep me").unwrap();
+        let error = PcapWriter::new(&path).err().expect("existing file must be rejected");
+        assert!(error.to_string().contains("Failed to create PCAP file"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep me");
+        std::fs::remove_file(path).unwrap();
     }
 }

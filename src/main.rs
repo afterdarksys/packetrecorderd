@@ -27,7 +27,8 @@ use tracing::{error, info};
 use cli::{Cli, Commands};
 use storage::PacketStore;
 use attribution::{AttributionCache, run_unix_socket_listener};
-use crossbeam_channel::{unbounded, Sender, Receiver};
+use crossbeam_channel::{bounded, Sender, Receiver, TrySendError};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
 use chrono::DateTime;
@@ -77,6 +78,15 @@ fn get_flow_hash(packet: &[u8]) -> u64 {
         }
     }
     hasher.finish()
+}
+
+fn capture_timestamp(header: &pcap::PacketHeader) -> Result<DateTime<Utc>> {
+    let micros = u32::try_from(header.ts.tv_usec)
+        .ok()
+        .filter(|value| *value < 1_000_000)
+        .context("libpcap returned invalid timestamp microseconds")?;
+    DateTime::<Utc>::from_timestamp(header.ts.tv_sec as i64, micros * 1_000)
+        .context("libpcap returned an invalid packet timestamp")
 }
 
 #[tokio::main]
@@ -284,6 +294,18 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
     )?;
     let session_id = db_writer.session_id().to_string();
     info!("Created capture session: {}", session_id);
+
+    let (finding_tx, finding_rx) = bounded::<storage::PluginFindingRecord>(4096);
+    let finding_store = Arc::clone(&store);
+    let finding_handle = thread::spawn(move || {
+        while let Ok(finding) = finding_rx.recv() {
+            if let Ok(store) = finding_store.lock() {
+                if let Err(e) = store.save_plugin_finding(&finding) {
+                    error!("Failed to persist plugin finding: {:?}", e);
+                }
+            }
+        }
+    });
     
     // Set up writer (database + optional PCAP)
     let writer: AsyncPacketWriter = if let Some(pcap_path) = &args.pcap {
@@ -306,29 +328,41 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
     
     let mut senders = Vec::new();
     let mut handles = Vec::new();
+    let mut shared_plugin_manager = protocols::plugin::PluginManager::new();
+    if let Some(config) = plugins_config {
+        for plugin in config.plugins {
+            let name = plugin.name.clone();
+            if let Err(error) = shared_plugin_manager.register_config(plugin) {
+                tracing::warn!(?error, plugin = %name, "Failed to register plugin");
+            }
+        }
+    }
     
     for i in 0..num_threads {
-        let (tx, rx): (Sender<(DateTime<Utc>, Vec<u8>)>, Receiver<(DateTime<Utc>, Vec<u8>)>) = unbounded();
+        // Analysis must not consume unbounded memory or stall recording under load.
+        let (tx, rx): (Sender<(DateTime<Utc>, Vec<u8>, u32)>, Receiver<(DateTime<Utc>, Vec<u8>, u32)>) = bounded(8192);
         senders.push(tx);
         
         // Clone forensics for sharing
         let forensics_clone = forensics.clone();
         
-        // Clone plugins config for sharing (it's cloneable)
-        let plugins_config_clone = plugins_config.clone();
+        let plugin_manager = shared_plugin_manager.clone();
         
         // Clone gossip service
         let gossip_clone = Some(gossip.clone());
         
         let model_client_clone = model_client.clone();
+        let finding_tx_clone = finding_tx.clone();
+        let session_id_clone = session_id.clone();
         
         // Spawn worker
         let handle = thread::spawn(move || {
-            let mut processor = PacketProcessor::new(forensics_clone, plugins_config_clone, gossip_clone, model_client_clone);
+            let mut processor = PacketProcessor::new_with_plugin_manager(forensics_clone, plugin_manager, gossip_clone, model_client_clone)
+                .with_finding_sink(session_id_clone, finding_tx_clone);
             info!("Worker {} started", i);
             
-            while let Ok((timestamp, data)) = rx.recv() {
-                if let Err(e) = processor.process(timestamp, &data) {
+            while let Ok((timestamp, data, original_length)) = rx.recv() {
+                if let Err(e) = processor.process_with_original_length(timestamp, &data, original_length) {
                     error!("Worker {} error: {:?}", i, e);
                 }
             }
@@ -356,25 +390,30 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
     
     let mut packet_count = 0u64;
     let start_time = std::time::Instant::now();
+    let mut last_flush = std::time::Instant::now();
     
     // Set up Ctrl+C handler
-    let writer_clone = writer.clone();
+    let stopping = Arc::new(AtomicBool::new(false));
+    let stopping_for_signal = Arc::clone(&stopping);
     tokio::spawn(async move {
         signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
         info!("Stopping capture...");
-        // In a real app, we might want to signal workers to stop here
-        if let Err(e) = writer_clone.close().await {
-            error!("Failed to close writer: {:?}", e);
-        }
-        std::process::exit(0);
+        stopping_for_signal.store(true, Ordering::Release);
     });
     
     // Capture loop
     loop {
+        if stopping.load(Ordering::Acquire) {
+            break;
+        }
         match session.next_packet() {
             Ok(packet) => {
-                let timestamp = Utc::now();
+                let timestamp = capture_timestamp(packet.header).unwrap_or_else(|error| {
+                    tracing::warn!(?error, "Invalid capture timestamp; using current time");
+                    Utc::now()
+                });
                 let data = packet.data.to_vec();
+                let original_length = packet.header.len;
                 
                 // 1. Write packet (I/O bound, async)
                 if let Err(e) = writer.write_packet(timestamp, data.clone()).await {
@@ -389,12 +428,27 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
                 let hash = get_flow_hash(&data);
                 let worker_idx = (hash as usize) % num_threads;
                 
-                if let Err(e) = senders[worker_idx].send((timestamp, data)) {
-                    error!("Failed to send packet to worker {}: {:?}", worker_idx, e);
+                match senders[worker_idx].try_send((timestamp, data, original_length)) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(_)) => {
+                        if packet_count.is_multiple_of(1000) {
+                            tracing::warn!("Analysis overloaded; recording continues while analysis packets are dropped");
+                        }
+                    }
+                    Err(TrySendError::Disconnected(_)) => {
+                        error!("Analysis worker {} disconnected", worker_idx);
+                    }
                 }
                 
                 if packet_count.is_multiple_of(1000) {
                     info!("Captured {} packets", packet_count);
+                }
+
+                if last_flush.elapsed() >= std::time::Duration::from_secs(1) {
+                    if let Err(error) = writer.flush().await {
+                        error!(?error, "Failed to flush packet writers");
+                    }
+                    last_flush = std::time::Instant::now();
                 }
                 
                 // Check limits
@@ -411,6 +465,12 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
             Err(e) => {
                 // Timeout is normal, just continue
                 if e.to_string().contains("timeout") {
+                    if last_flush.elapsed() >= std::time::Duration::from_secs(1) {
+                        if let Err(error) = writer.flush().await {
+                            error!(?error, "Failed to flush packet writers");
+                        }
+                        last_flush = std::time::Instant::now();
+                    }
                     continue;
                 }
                 error!("Error capturing packet: {:?}", e);
@@ -423,6 +483,8 @@ async fn cmd_capture(args: cli::CaptureArgs, encryption_key: Option<String>) -> 
     for handle in handles {
         let _ = handle.join();
     }
+    drop(finding_tx);
+    let _ = finding_handle.join();
     
     writer.close().await?;
     info!("Capture complete: {} packets captured", packet_count);

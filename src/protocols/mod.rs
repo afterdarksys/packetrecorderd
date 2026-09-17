@@ -14,6 +14,7 @@ pub mod smtp;
 pub mod ssh;
 pub mod bittorrent;
 pub mod plugin;
+pub mod reassembly;
 
 #[allow(dead_code)]
 use anyhow::Result;
